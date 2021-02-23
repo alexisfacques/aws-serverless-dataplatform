@@ -1,0 +1,2 @@
+flatten-json==0.1.13
+logmatic-python==0.1.7

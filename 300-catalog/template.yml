@@ -1,0 +1,244 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Transform:
+  - AWS::Serverless-2016-10-31
+
+Description: >-
+  Deploy S3 buckets, and a CloudTrail trail to event off S3 events.
+
+# Parameters:
+
+Outputs:
+
+  IngressBucketArn:
+    Description: >-
+      Bucket ARN. A bucket in which any data type is to be expected.
+    Value:
+      Fn::Join:
+        - ""
+        - - "arn:aws:s3:::"
+          - !Ref IngressBucket
+    Export:
+      Name: IngressBucketArn
+
+#
+  IngressBucketName:
+    Description: >-
+      Bucket name. A bucket in which any data type is to be expected.
+    Value: !Ref IngressBucket
+    Export:
+      Name: IngressBucketName
+
+#
+  DataframeBucketArn:
+    Description: >-
+      Bucket ARN.
+    Value:
+      Fn::Join:
+        - ""
+        - - "arn:aws:s3:::"
+          - !Ref DataframeBucket
+    Export:
+      Name: DataframeBucketArn
+
+#
+  DataframeBucketName:
+    Description: >-
+      Bucket name.
+    Value: !Ref DataframeBucket
+    Export:
+      Name: DataframeBucketName
+
+Resources:
+
+# A bucket in which any data type is to be expected. All files and data will go
+# through cleaning & validation, before being copied to the JSON bucket.
+  IngressBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Join:
+          - "-"
+          - - !Ref AWS::AccountId
+            - "lake-ingress"
+
+#
+  JsonBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Join:
+          - "-"
+          - - !Ref AWS::AccountId
+            - "lake-json"
+
+#
+  DataframeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Join:
+          - "-"
+          - - !Ref AWS::AccountId
+            - "lake-dataframe"
+
+# This is the bucket to which CloudTrail will log all S3 lake activity.
+  LogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Join:
+          - "-"
+          - - !Ref AWS::AccountId
+            - "lake-logs"
+
+# This grants permissions for CloudTrail to write files to the logging bucket.
+  LogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LogsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AWSCloudTrailS3AclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource:
+              - Fn::Join:
+                  - ""
+                  - - "arn:aws:s3:::"
+                    - !Ref LogsBucket
+          - Sid: AWSCloudTrailS3Write
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource:
+              - Fn::Join:
+                  - ""
+                  - - "arn:aws:s3:::"
+                    - !Ref LogsBucket
+                    - "/AWSLogs/"
+                    - !Ref AWS::AccountId
+                    - "/*"
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+
+# A trail that specifies the settings for delivery of log data of lake buckets
+# to the LogsBucket bucket.
+  LakeEventsTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn:
+      - LogsBucketPolicy
+    Properties:
+      TrailName: lake-events-trail
+      S3BucketName: !Ref LogsBucket
+      IsLogging: true
+      IsMultiRegionTrail: false
+      EventSelectors:
+        - IncludeManagementEvents: false
+          DataResources:
+            - Type: AWS::S3::Object
+              Values:
+                - Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref IngressBucket
+                      - "/"
+                - Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref JsonBucket
+                      - "/"
+                - Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref DataframeBucket
+                      - "/"
+      IncludeGlobalServiceEvents: false
+
+#
+  ConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: consumer
+      Description: consumer
+      Role:
+        Fn::GetAtt:
+          - ConsumerFunctionRole
+          - Arn
+      CodeUri: ./consumer/
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.8
+      MemorySize: 128
+      Timeout: 300
+      Environment:
+        Variables:
+          LOG_LEVEL: DEBUG
+
+  ConsumerFunctionEventbridgePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ConsumerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+
+  ConsumerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 90
+      LogGroupName:
+        Fn::Sub: "/aws/lambda/${ConsumerFunction}"
+
+  ConsumerFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ConsumerFunction
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        # Create and put logs to Cloudwatch log groups.
+        - PolicyName: ConsumerFunctionLogsWrite
+          PolicyDocument:
+            Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource:
+                - Fn::Join:
+                    - ""
+                    - - "arn:"
+                      - !Ref AWS::Partition
+                      - ":logs:"
+                      - !Ref AWS::Region
+                      - ":"
+                      - !Ref AWS::AccountId
+                      - ":*"
+
+  IngressBucketToConsumerRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: IngressBucketToConsumerRule
+      EventPattern:
+        source:
+          - aws.s3
+        detail:
+          eventName:
+            - PutObject
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ConsumerFunction.Arn
+          Id: ConsumerFunction

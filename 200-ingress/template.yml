@@ -1,0 +1,380 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Transform:
+  - AWS::Serverless-2016-10-31
+
+Description: >-
+  An ApiGateway REST API with a S3 PutObject proxy integration allowing to
+  publish data to the data plaform tables.
+
+Parameters:
+
+  EnableDebugStage:
+    Description: >-
+      Deploy an extra API stage with additional verbose & logging. Useful to
+      debug integration problems.
+    AllowedValues:
+      - True
+      - False
+    Default: False
+    Type: String
+
+Conditions:
+
+  ShouldCreateDebugStage:
+    Fn::Equals:
+      - True
+      - !Ref EnableDebugStage
+
+Resources:
+
+  # Configure the IAM Role to be used to publish logs to CloudWatch.
+  # https://docs.aws.amazon.com/apigateway/latest/developerguide/\
+  # set-up-logging.html
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayAccountRole.Arn
+
+  # A Role allowing ApiGateway to publish logs to CloudWatch.
+  ApiGatewayAccountRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ApiGatewayAccount
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        # Create and put logs to Cloudwatch log groups.
+        # A managed copy of the AmazonAPIGatewayPushToCloudWatchLogs policy
+        # document.
+        - PolicyName: ApiGatewayAccountLogWrite
+          PolicyDocument:
+            Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:DescribeLogGroups
+                - logs:DescribeLogStreams
+                - logs:PutLogEvents
+                - logs:GetLogEvents
+                - logs:FilterLogEvent
+              Resource:
+                - Fn::Join:
+                    - ""
+                    - - "arn:"
+                      - !Ref AWS::Partition
+                      - ":logs:"
+                      - !Ref AWS::Region
+                      - ":"
+                      - !Ref AWS::AccountId
+                      - ":*"
+
+  # The RestApi itself. ApiGatewayV2 HTTP APIs are far more straightforward,
+  # cheaper to operate (??) and easy to configure, but can only integrate with
+  # a subset of services (e.g. Lambda, SQS, Eventbridge...), which defies the
+  # purpose of what were trying to achieve (write to S3 as fast as possible).
+  IngressRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: data_platform-ingress
+      Description: >-
+        Data Platform ingress service.
+      BinaryMediaTypes:
+        - application/json
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      FailOnWarnings: False
+
+  IngressRestApiRequestValidator:
+    Type: AWS::ApiGateway::RequestValidator
+    Properties:
+      Name: Validate query string parameters and headers
+      RestApiId: !Ref IngressRestApi
+      ValidateRequestBody: False
+      ValidateRequestParameters: True
+
+  # TODO: Would be fun to integrate more methods to dynamically return
+  # the list of available External tables...
+  IngressRestApiTableResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId:  !GetAtt IngressRestApi.RootResourceId
+      PathPart: table
+      RestApiId: !Ref IngressRestApi
+
+  # TODO: Would be fun to integrate more methods to dynamically return metadata
+  # about External tables created in AWS Glue / with Athena, such as:
+  # Columns, Number of rows, partition keys, etc etc etc...
+  IngressRestApiTableNameResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId:  !Ref IngressRestApiTableResource
+      PathPart: "{tableName}"
+      RestApiId: !Ref IngressRestApi
+
+  IngressRestApiTableNameObjectResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref IngressRestApiTableNameResource
+      PathPart: "object"
+      RestApiId: !Ref IngressRestApi
+
+  # S3 PutObject ApiGateway integration, please check doc. at
+  # https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html
+  # otherwise the following won't make any sense.
+  IngressRestApiTableNameObjectPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref IngressRestApi
+      ResourceId: !Ref IngressRestApiTableNameObjectResource
+      HttpMethod: POST
+      OperationName: PutObjectToTable
+      # TODO: Add usage plans.
+      ApiKeyRequired: False
+      # TODO: Add Authorization.
+      AuthorizationType: NONE
+      RequestValidatorId: !Ref IngressRestApiRequestValidator
+      # Forwarding the following headers to the integration:
+      RequestParameters:
+        method.request.header.Content-Disposition: False
+        method.request.header.Content-Type: True
+        method.request.header.x-amz-acl: False
+        # Add tags to your file using this header.
+        # The tag-set must be encoded as URL Query parameters, for example, #
+        # "Key1=Value1".
+        method.request.header.x-amz-tagging: False
+        method.request.path.tableName: True
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 401
+        - StatusCode: 403
+        - StatusCode: 415
+        - StatusCode: 500
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: PUT
+        Uri:
+          # Don't try to use the Action integration, it's been a wholeful
+          # waste of time for me. Stick with the path override one, you'll
+          # find better references online.
+          Fn::Join:
+            - ""
+            - - "arn:aws:apigateway:eu-west-1:s3:path/"
+              # All POST requests will create a new object on the
+              # IngressBucket.
+              - Fn::ImportValue: IngressBucketName
+              # The following is a (cool) hack...
+              #
+              # We want every S3 key/prefix to be unique, in order to maximize
+              # access concurrency on S3:
+              # https://docs.aws.amazon.com/AmazonS3/latest/userguide\
+              # /optimizing-performance.html
+              #
+              # To do so, we will set the object "key" to the ApiGateway
+              # context unique requestId. Here the "key" path parameter has
+              # not been defined anywhere yet. But will be overwritten
+              # in the request mapping (prior to being forwarded to the
+              # integration).
+              - "/{key}"
+        Credentials: !GetAtt IngressRestApiTableNamePutRole.Arn
+        RequestParameters:
+          # Get all forwarded parameters from the request:
+          integration.request.header.Content-Disposition: >-
+            method.request.header.Content-Disposition
+          integration.request.header.Content-Type: >-
+            method.request.header.Content-Type
+          integration.request.header.x-amz-acl: >-
+            method.request.header.x-amz-acl
+          integration.request.header.x-amz-tagging: >-
+            method.request.header.x-amz-tagging
+          integration.request.path.tableName: >-
+            method.request.path.tableName
+          # Set Object custom metadata using the x-amz-meta- headers:
+          integration.request.header.x-amz-meta-table: >-
+            method.request.path.tableName
+        RequestTemplates:
+          # Key definition as described above, as well as the request time
+          # metadata (always useful when deduping data).
+          application/json: |
+            #set($context.requestOverride.path.key =
+              'id=' + $context.requestId)
+            #set($context.requestOverride.header.x-amz-meta-request-time =
+              $context.requestTime)
+
+            $input.body
+        PassthroughBehavior: NEVER
+        ContentHandling: CONVERT_TO_TEXT
+        TimeoutInMillis: 29000
+        IntegrationResponses:
+          - StatusCode: 200
+            SelectionPattern: "2\\d{2}"
+            ResponseTemplates:
+              # Some Apache VML hacks to get a proper JSON response. There's
+              # propably a better way to do so.
+              application/json: |
+                { "success": true, "data": { "id": "$context.requestId" } }
+          - StatusCode: 500
+            # Return all integration errors as server errors.
+            # e.g. a 4xx error in this case could be a misconfigured IAM role.
+            SelectionPattern: "[4-5]\\d{2}"
+            ResponseTemplates:
+              # Some Apache VML hacks to get a proper JSON response. There's
+              # propably a better way to do so.
+              application/json: |
+                #set ($e = $input.body.toString())
+                #set ($code =
+                  $e.replaceFirst('(?s).*<Code>(.*)</Code>.*', '$1'))
+                #set ($message =
+                  $e.replaceFirst('(?s).*<Message>(.*)</Message>.*', '$1'))
+                #set ($requestId =
+                  $e.replaceFirst('(?s).*<RequestId>(.*)</RequestId>.*', '$1'))
+
+                {
+                  "success": false,
+                  "data": {
+                    "requestId": "$context.requestId",
+                    "error": "$code",
+                    "errorDetail": {
+                      "message": "$message",
+                      "requestId": "$requestId"
+                    }
+                  }
+                }
+
+  # A Role allowing to PutObjects to the IngressBucket.
+  IngressRestApiTableNamePutRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: IngressRestApiTableNamePutRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: IngressRestApiTableNamePutBucketList
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - Fn::ImportValue: IngressBucketArn
+        - PolicyName: IngressRestApiTableNamePutBucketWrite
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - Fn::ImportValue: IngressBucketArn
+                        - "/*"
+
+  IngressRestApiDeployment:
+    DependsOn:
+      - IngressRestApiTableNameObjectPostMethod
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref IngressRestApi
+      Description: Initial deployment of the data_platform-ingress REST API.
+
+  IngressRestApiMainStage:
+    Type: AWS::ApiGateway::Stage
+    # Requires Role ARN to be set up in the ApiGateway account; check:
+    # https://aws.amazon.com/premiumsupport/knowledge-center\
+    # /api-gateway-cloudwatch-logs/
+    DependsOn:
+      - ApiGatewayAccount
+    Properties:
+      StageName: main
+      Description: Main stage of the data_platform-ingress REST API.
+      RestApiId: !Ref IngressRestApi
+      DeploymentId: !Ref IngressRestApiDeployment
+      AccessLogSetting:
+        DestinationArn: !GetAtt IngressRestApiMainLogGroup.Arn
+        Format:
+          '
+          {
+            "requestId": "$context.requestId",
+            "ip": "$context.identity.sourceIp",
+            "caller": "$context.identity.caller",
+            "user": "$context.identity.user",
+            "requestTime": "$context.requestTime",
+            "httpMethod": "$context.httpMethod",
+            "resourcePath": "$context.resourcePath",
+            "status": "$context.status",
+            "protocol": "$context.protocol",
+            "responseLength": "$context.responseLength"
+          }
+          '
+      MethodSettings:
+        - HttpMethod: "*"
+          ResourcePath: "/*"
+          ThrottlingBurstLimit: 5000
+          ThrottlingRateLimit: 10000.0
+
+  IngressRestApiMainLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+      LogGroupName: /aws/apigateway/data_platform-ingress/main
+
+  IngressRestApiDebugStage:
+    Type: AWS::ApiGateway::Stage
+    Condition: ShouldCreateDebugStage
+    DependsOn:
+      - ApiGatewayAccount
+    Properties:
+      StageName: debug
+      Description: >-
+        Debug stage of the data_platform-ingress REST API, configured with
+        extra Cloudwatch logs.
+      RestApiId: !Ref IngressRestApi
+      DeploymentId: !Ref IngressRestApiDeployment
+      AccessLogSetting:
+        DestinationArn: !GetAtt IngressRestApiDebugLogGroup.Arn
+        Format:
+          '
+          {
+            "requestId": "$context.requestId",
+            "ip": "$context.identity.sourceIp",
+            "caller": "$context.identity.caller",
+            "user": "$context.identity.user",
+            "requestTime": "$context.requestTime",
+            "httpMethod": "$context.httpMethod",
+            "resourcePath": "$context.resourcePath",
+            "status": "$context.status",
+            "protocol": "$context.protocol",
+            "responseLength": "$context.responseLength"
+          }
+          '
+      MethodSettings:
+        - HttpMethod: "*"
+          ResourcePath: "/*"
+          DataTraceEnabled: True
+          LoggingLevel: INFO
+
+  IngressRestApiDebugLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: ShouldCreateDebugStage
+    Properties:
+      RetentionInDays: 30
+      LogGroupName: /aws/apigateway/data_platform-ingress/debug

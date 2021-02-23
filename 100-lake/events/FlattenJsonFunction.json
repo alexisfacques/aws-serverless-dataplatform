@@ -1,0 +1,71 @@
+{
+    "asctime": "2021-02-22T12:03:43Z+0000",
+    "name": "consumer",
+    "processName": "MainProcess",
+    "filename": "lambda_function.py",
+    "funcName": "lambda_handler",
+    "levelname": "INFO",
+    "lineno": 25,
+    "module": "lambda_function",
+    "threadName": "MainThread",
+    "message": "Got event.",
+    "event": {
+        "version": "0",
+        "id": "113ff57c-cfe3-50da-20f2-8cf58c59bbb8",
+        "detail-type": "AWS API Call via CloudTrail",
+        "source": "aws.s3",
+        "account": "177754923675",
+        "time": "2021-02-22T12:03:38Z",
+        "region": "eu-west-1",
+        "resources": [],
+        "detail": {
+            "eventVersion": "1.08",
+            "userIdentity": {
+                "type": "Root",
+                "principalId": "177754923675",
+                "arn": "arn:aws:iam::177754923675:root",
+                "accountId": "177754923675",
+                "accessKeyId": "AKIAJW2I6ERLDC5KFDNQ"
+            },
+            "eventTime": "2021-02-22T12:03:38Z",
+            "eventSource": "s3.amazonaws.com",
+            "eventName": "PutObject",
+            "awsRegion": "eu-west-1",
+            "sourceIPAddress": "217.128.94.4",
+            "userAgent": "[aws-cli/2.1.26 Python/3.7.4 Darwin/20.2.0 exe/x86_64 prompt/off command/s3.cp]",
+            "requestParameters": {
+                "bucketName": "177754923675-lake-ingress",
+                "Host": "177754923675-lake-ingress.s3.eu-west-1.amazonaws.com",
+                "key": "document3.pdf"
+            },
+            "responseElements": null,
+            "additionalEventData": {
+                "SignatureVersion": "SigV4",
+                "CipherSuite": "ECDHE-RSA-AES128-GCM-SHA256",
+                "bytesTransferredIn": 248904,
+                "AuthenticationMethod": "AuthHeader",
+                "x-amz-id-2": "LQ2yI921qYE3Xpae+EAJOmDO/4y9hmLotO6iFIKg1NZtoaZXPXjE5iTTp1yb9fnOSqI6N0ssHqE=",
+                "bytesTransferredOut": 0
+            },
+            "requestID": "4T6HCV5GFKEG8H0T",
+            "eventID": "15f84e6d-ce1c-437b-a95f-b9e4969d78f3",
+            "readOnly": false,
+            "resources": [
+                {
+                    "type": "AWS::S3::Object",
+                    "ARN": "arn:aws:s3:::177754923675-lake-ingress/document3.pdf"
+                },
+                {
+                    "accountId": "177754923675",
+                    "type": "AWS::S3::Bucket",
+                    "ARN": "arn:aws:s3:::177754923675-lake-ingress"
+                }
+            ],
+            "eventType": "AwsApiCall",
+            "managementEvent": false,
+            "recipientAccountId": "177754923675",
+            "eventCategory": "Data"
+        }
+    },
+    "timestamp": "2021-02-22T12:03:43Z+0000"
+}
