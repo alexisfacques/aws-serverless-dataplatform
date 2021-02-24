@@ -472,9 +472,11 @@ Resources:
               bucketName: $.detail.requestParameters.bucketName
               key: $.detail.requestParameters.key
             InputTemplate:
-              '
-              {
-                "bucketName": <bucketName>,
-                "key": <key>
-              }
-              '
+              Fn::Sub:
+                '
+                {
+                  "targetBucket": "${DataframeBucket}",
+                  "bucketName": <bucketName>,
+                  "key": <key>
+                }
+                '
