@@ -1,0 +1,5 @@
+{
+  "eventSource": "s3.amazonaws.com",
+  "eventName":"PutObject",
+  "key": "key"
+}

@@ -1,0 +1,59 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Transform:
+  - AWS::Serverless-2016-10-31
+
+Description: >-
+  Lambda layers containing custom Python libraries and other shared
+  dependencies.
+
+# Parameters:
+
+# Conditions:
+
+Outputs:
+
+  EventsPythonUtilsLayerVersionArn:
+    Description: >-
+      Lambda LayerVersion ARN. Contains handlers and utilities to use
+      Eventbridge events with AWS Lambdas.
+    Value: !Ref EventsPythonUtilsLayerVersion
+    Export:
+      Name: EventsPythonUtilsLayerVersion
+
+  SqsPythonUtilsLayerVersionArn:
+    Description: >-
+      Lambda LayerVersion ARN. Contains Python handlers and utilities to use
+      SQS Queues with AWS Lambdas.
+    Value: !Ref SqsPythonUtilsLayerVersion
+    Export:
+      Name: SqsPythonUtilsLayerVersionArn
+
+Resources:
+
+  EventsPythonUtilsLayerVersion:
+      Type: AWS::Serverless::LayerVersion
+      Properties:
+        LayerName: python-events_utils
+        Description: >-
+          Python handlers and utilities to use Eventbridge events with AWS
+          Lambdas.
+        ContentUri: events_utils/
+        CompatibleRuntimes:
+          - python3.8
+        LicenseInfo: MIT
+      Metadata:
+        BuildMethod: python3.8
+
+  SqsPythonUtilsLayerVersion:
+      Type: AWS::Serverless::LayerVersion
+      Properties:
+        LayerName: python-sqs_utils
+        Description: >-
+          Python handlers and utilities to use SQS Queues with AWS Lambdas.
+        ContentUri: sqs_utils/
+        CompatibleRuntimes:
+          - python3.8
+        LicenseInfo: MIT
+      Metadata:
+        BuildMethod: python3.8

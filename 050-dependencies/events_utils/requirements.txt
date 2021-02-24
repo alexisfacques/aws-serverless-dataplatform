@@ -1,0 +1,2 @@
+boto3==1.14.44
+cachetools==4.1.0

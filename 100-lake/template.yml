@@ -10,7 +10,6 @@ Description: >-
 
 Outputs:
 
-  #
   IngressBucketArn:
     Description: >-
       Bucket ARN. A bucket in which any data type is to be expected.
@@ -22,7 +21,6 @@ Outputs:
     Export:
       Name: IngressBucketArn
 
-  #
   IngressBucketName:
     Description: >-
       Bucket name. A bucket in which any data type is to be expected.
@@ -30,7 +28,6 @@ Outputs:
     Export:
       Name: IngressBucketName
 
-  #
   DataframeBucketArn:
     Description: >-
       Bucket ARN.
@@ -42,7 +39,6 @@ Outputs:
     Export:
       Name: DataframeBucketArn
 
-  #
   DataframeBucketName:
     Description: >-
       Bucket name.
@@ -64,7 +60,9 @@ Resources:
           - - !Ref AWS::AccountId
             - "lake-ingress"
 
-  #
+  # All valid JSON data from IngressBucket will be here partitionned by table
+  # name and date processed based on the Object's metdata.
+  # TODO: Invalid JSON data to be tagged and indexed in DynamoDB.
   JsonBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -74,7 +72,8 @@ Resources:
           - - !Ref AWS::AccountId
             - "lake-json"
 
-  #
+  # All valid data fron JsonBucket (potentially, other data types) will be
+  # transformed to a flat json structure (simillar to a dataframe).
   DataframeBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -177,6 +176,8 @@ Resources:
       CodeUri: ./flatten_json/
       Handler: lambda_function.lambda_handler
       Runtime: python3.8
+      Layers:
+        - Fn::ImportValue: SqsPythonUtilsLayerVersionArn
       MemorySize: 128
       Timeout: 300
       Environment:
@@ -184,7 +185,7 @@ Resources:
           LOG_LEVEL: DEBUG
 
   # Allow Eventbridge to invoke the FlattenJsonFunction lambda function.
-  FlattenJsonFunctionSqsPermission:
+  FlattenJsonFunctionEventbridgePermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref FlattenJsonFunction
@@ -276,3 +277,204 @@ Resources:
                       - - "arn:aws:s3:::"
                         - !Ref DataframeBucket
                         - "/*"
+
+  #
+  IngestObjectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: lake-ingest_object
+      Description: >-
+        TODO
+      Role:
+        Fn::GetAtt:
+          - IngestObjectFunctionRole
+          - Arn
+      CodeUri: ./ingest_object/
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.8
+      Layers:
+        - Fn::ImportValue: SqsPythonUtilsLayerVersionArn
+      MemorySize: 128
+      Timeout: 300
+      Environment:
+        Variables:
+          LOG_LEVEL: DEBUG
+          JSON_BUCKET_NAME: !Ref JsonBucket
+
+  # Allow Eventbridge to invoke the IngestObjectFunction lambda function.
+  IngestObjectFunctionEventbridgePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref IngestObjectFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+
+  #
+  IngestObjectFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+      LogGroupName:
+        Fn::Sub: "/aws/lambda/${IngestObjectFunction}"
+
+  # Allow the IngestObjectFunction lambda function to write to Cloudwatch,
+  # read/write to S3.
+  IngestObjectFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: IngestObjectFunction
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        # Create and put logs to Cloudwatch log groups.
+        - PolicyName: FlattenFunctionLogsWrite
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - "arn:"
+                        - !Ref AWS::Partition
+                        - ":logs:"
+                        - !Ref AWS::Region
+                        - ":"
+                        - !Ref AWS::AccountId
+                        - ":*"
+        - PolicyName: FlattenFunctionS3List
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - "arn:aws:s3:::"
+                        - !Ref IngressBucket
+                  - Fn::Join:
+                      - ""
+                      - - "arn:aws:s3:::"
+                        - !Ref JsonBucket
+        # Get objects from the lake JsonBucket.
+        - PolicyName: FlattenFunctionS3Read
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - "arn:aws:s3:::"
+                        - !Ref IngressBucket
+                        - "/*"
+        # Put objects to the lake DataframeBucket.
+        - PolicyName: FlattenFunctionS3Write
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - "arn:aws:s3:::"
+                        - !Ref JsonBucket
+                        - "/*"
+
+  #
+  IngressPutObjectToIngestObjectFunctionRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: >-
+        Forward all S3 PutObject events from the IngressBucket to the
+        IngestObjectFunction lambda function.
+      EventPattern:
+        # Get S3 events via CloudTrail...
+        source:
+          - aws.s3
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          # ... of type PutObject...
+          eventName:
+            - PutObject
+          # ... from the bucket IngressBucket...
+          requestParameters:
+            bucketName:
+              - !Ref IngressBucket
+          # ... Object prefix/key must unique and properly named.
+            key:
+              - prefix: "id="
+      State: ENABLED
+      Targets:
+        # Forward to IngestObjectFunction lambda function.
+        - Arn: !GetAtt IngestObjectFunction.Arn
+          Id: IngestObjectFunction
+        # Strip event from all useless parameters and craft a new event.
+          InputTransformer:
+            InputPathsMap:
+              bucketName: $.detail.requestParameters.bucketName
+              key: $.detail.requestParameters.key
+            InputTemplate:
+              '
+              {
+                "bucketName": <bucketName>,
+                "key": <key>
+              }
+              '
+
+  #
+  JsonPutObjectToFlattenJsonFunctionRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: >-
+        Forward all S3 PutObject events from the JsonBucket to the
+        FlattenJsonFunction lambda function.
+      EventPattern:
+        # Get S3 events via CloudTrail...
+        source:
+          - aws.s3
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          # ... of type PutObject...
+          eventName:
+            - PutObject
+          # ... from the bucket IngressBucket...
+          requestParameters:
+            bucketName:
+              - !Ref JsonBucket
+          # ... Object prefix/key must unique and properly partitionned.
+            key:
+              - prefix: "table="
+      State: ENABLED
+      Targets:
+        # Forward to FlattenJsonFunction lambda function.
+        - Arn: !GetAtt FlattenJsonFunction.Arn
+          Id: FlattenJsonFunction
+        # Strip event from all useless parameters and craft a new event.
+          InputTransformer:
+            InputPathsMap:
+              bucketName: $.detail.requestParameters.bucketName
+              key: $.detail.requestParameters.key
+            InputTemplate:
+              '
+              {
+                "bucketName": <bucketName>,
+                "key": <key>
+              }
+              '
