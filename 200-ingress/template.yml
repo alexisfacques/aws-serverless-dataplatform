@@ -9,13 +9,22 @@ Description: >-
 
 Parameters:
 
+  EnableApiAuthorization:
+    Description: >-
+      Leave empty
+    AllowedValues:
+      - "True"
+      - "False"
+    Default: 'False'
+    Type: String
+
   EnableApiIntegrationLogs:
     Description: >-
       Enable extra logs, useful to debug ApiGateway integration problems.
     AllowedValues:
-      - True
-      - False
-    Default: False
+      - "True"
+      - "False"
+    Default: "False"
     Type: String
 
   EnableDataPlatformEncryption:
@@ -25,22 +34,27 @@ Parameters:
       $1/month with further usage cost. Leave empty if you don't know what
       you're doing.
     AllowedValues:
-      - True
-      - False
-    Default: False
+      - "True"
+      - "False"
+    Default: "False"
     Type: String
 
 Conditions:
 
-  ShouldUseDataPlatformKmsKey:
+  ShouldEnableAuthorization:
     Fn::Equals:
-      - True
-      - !Ref EnableDataPlatformEncryption
+      - "True"
+      - !Ref EnableApiAuthorization
 
   ShouldEnableDataTrace:
     Fn::Equals:
-      - True
+      - "True"
       - !Ref EnableApiIntegrationLogs
+
+  ShouldUseDataPlatformKmsKey:
+    Fn::Equals:
+      - "True"
+      - !Ref EnableDataPlatformEncryption
 
 Outputs:
 
@@ -176,7 +190,16 @@ Resources:
       # TODO: Add usage plans.
       ApiKeyRequired: False
       # TODO: Add Authorization.
-      AuthorizationType: NONE
+      AuthorizationType:
+        Fn::If:
+          - ShouldEnableAuthorization
+          - COGNITO_USER_POOLS
+          - NONE
+      AuthorizerId:
+        Fn::If:
+          - ShouldEnableAuthorization
+          - !Ref IngressRestApiAuthorizer
+          - !Ref AWS::NoValue
       RequestValidatorId: !Ref IngressRestApiRequestValidator
       # Forwarding the following headers to the integration:
       RequestParameters:
@@ -401,3 +424,18 @@ Resources:
         BurstLimit: 20
         RateLimit: 10
       UsagePlanName: data_platform-ingress-development
+
+  IngressRestApiAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Condition: ShouldEnableAuthorization
+    Properties:
+      Name: data_platform-ingress-authorizer
+      # AuthorizerCredentials: String
+      AuthorizerResultTtlInSeconds: 300
+      # AuthorizerUri: String
+      IdentitySource: method.request.header.Authorization
+      # IdentityValidationExpression: String
+      ProviderARNs:
+        - Fn::ImportValue: DataPlatformUserPoolArn
+      RestApiId: !Ref IngressRestApi
+      Type: COGNITO_USER_POOLS

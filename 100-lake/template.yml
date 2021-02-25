@@ -16,16 +16,16 @@ Parameters:
       $1/month with further usage cost. Leave empty if you don't know what
       you're doing.
     AllowedValues:
-      - True
-      - False
-    Default: False
+      - "True"
+      - "False"
+    Default: "False"
     Type: String
 
 Conditions:
 
   ShouldUseDataPlatformKmsKey:
     Fn::Equals:
-      - True
+      - "True"
       - !Ref EnableDataPlatformEncryption
 
 Outputs:

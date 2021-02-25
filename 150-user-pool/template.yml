@@ -1,0 +1,52 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Transform:
+  - AWS::Serverless-2016-10-31
+
+Description: >-
+  Customer master keys used throughout the data platform if encryption is
+  enabled.
+
+Outputs:
+
+  DataPlatformUserPoolArn:
+    Description: The data platform Cognito user pool ARN.
+    Value: !GetAtt DataPlatformUserPool.Arn
+    Export:
+      Name: DataPlatformUserPoolArn
+
+  DataPlatformUserPoolId:
+    Description: The data platform Cognito user pool id.
+    Value: !Ref DataPlatformUserPool
+    Export:
+      Name: DataPlatformUserPoolId
+
+Resources:
+
+  #
+  DataPlatformUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: data_platform-user_pool
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: admin_only
+            Priority: 1
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: True
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+      UsernameAttributes:
+        - email
+      Schema:
+        - Name: email
+          Required: True
+
+  #
+  DataPlatformUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: data_platform-user_pool-client
+      UserPoolId: !Ref DataPlatformUserPool
+      GenerateSecret: True
