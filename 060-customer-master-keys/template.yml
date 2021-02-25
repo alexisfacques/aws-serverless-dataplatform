@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Transform:
+  - AWS::Serverless-2016-10-31
+
+Description: >-
+  Customer master keys used throughout the data platform if encryption is
+  enabled.
+
+Parameters:
+
+  EnableDataPlatformEncryption:
+    Description: >-
+      Create and use a KMS Key to encrypt all log, S3 and at-rest SQS data
+      throughout the data platform. Not free-tier compliant: Key creation cost
+      $1/month with further usage cost. Leave empty if you don't know what
+      you're doing.
+    AllowedValues:
+      - True
+      - False
+    Default: False
+    Type: String
+
+Conditions:
+
+  ShouldCreateKmsKeys:
+    Fn::Equals:
+      - True
+      - !Ref EnableDataPlatformEncryption
+
+Outputs:
+
+  DataPlatformKeyId:
+    Description: The KMS key used by all data platform services, if any.
+    Condition: ShouldCreateKmsKeys
+    Value: !Ref DataPlatformKey
+    Export:
+      Name: DataPlatformKeyId
+
+Resources:
+
+###############################################################################
+# \/                         KMS keys configuration                        \/ #
+###############################################################################
+
+  DataPlatformKey:
+    Type: AWS::KMS::Key
+    Condition: ShouldCreateKmsKeys
+    Properties:
+      EnableKeyRotation: True
+      KeyPolicy:
+        Version: "2012-10-17"
+        Id: data-platform-services
+        Statement:
+        - Sid: Enable IAM User Permissions
+          Effect: Allow
+          Principal:
+            AWS:
+              Fn::Join:
+              - ""
+              - - "arn:aws:iam::"
+                - !Ref AWS::AccountId
+                - ":root"
+          Action: kms:*
+          Resource: "*"

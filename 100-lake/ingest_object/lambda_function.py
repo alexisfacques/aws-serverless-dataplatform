@@ -136,12 +136,11 @@ def handle_event(event: Dict, *_args, **_kwargs) -> Dict:
     try:
         # Put the object to S3.
 
-        put_response = s3.put_object(**{
-            'Bucket': JSON_BUCKET_NAME,
-            'Key': s3_key.strip('/'),
-            'Body': json.dumps(s3_body),
-            'Metadata': metadata
-        })
+        put_response = s3.put_object(Bucket=JSON_BUCKET_NAME,
+                                     Key=s3_key.strip('/'),
+                                     Body=json.dumps(s3_body),
+                                     Metadata=metadata,
+                                     ContentType='application/json')
 
         if (code := put_response['ResponseMetadata']['HTTPStatusCode']) == 200:
             logger.debug('Successfully put the file to S3.',

@@ -9,10 +9,21 @@ Description: >-
 
 Parameters:
 
-  EnableDebugStage:
+  EnableApiIntegrationLogs:
     Description: >-
-      Deploy an extra API stage with additional verbose & logging. Useful to
-      debug integration problems.
+      Enable extra logs, useful to debug ApiGateway integration problems.
+    AllowedValues:
+      - True
+      - False
+    Default: False
+    Type: String
+
+  EnableDataPlatformEncryption:
+    Description: >-
+      Create and use a KMS Key to encrypt all log, S3 and at-rest SQS data
+      throughout the data platform. Not free-tier compliant: Key creation cost
+      $1/month with further usage cost. Leave empty if you don't know what
+      you're doing.
     AllowedValues:
       - True
       - False
@@ -21,10 +32,33 @@ Parameters:
 
 Conditions:
 
-  ShouldCreateDebugStage:
+  ShouldUseDataPlatformKmsKey:
     Fn::Equals:
       - True
-      - !Ref EnableDebugStage
+      - !Ref EnableDataPlatformEncryption
+
+  ShouldEnableDataTrace:
+    Fn::Equals:
+      - True
+      - !Ref EnableApiIntegrationLogs
+
+Outputs:
+
+  IngressRestApiId:
+    Description: >-
+      ApiGateway REST API id: The data_platform-ingress API, used to proxy
+      a set of S3 operations and PutObject data into the data platform.
+    Value: !Ref IngressRestApi
+    Export:
+      Name: IngressRestApiId
+
+  IngressRestApiMainStageId:
+    Description: >-
+      ApiGateway REST API stage id: Main stage of the data_platform-ingress
+      API.
+    Value: !Ref IngressRestApiMainStage
+    Export:
+      Name: IngressRestApiMainStageId
 
 Resources:
 
@@ -192,8 +226,6 @@ Resources:
           # Get all forwarded parameters from the request:
           integration.request.header.Content-Disposition: >-
             method.request.header.Content-Disposition
-          integration.request.header.Content-Type: >-
-            method.request.header.Content-Type
           integration.request.header.x-amz-acl: >-
             method.request.header.x-amz-acl
           integration.request.header.x-amz-tagging: >-
@@ -207,6 +239,8 @@ Resources:
           # Key definition as described above, as well as the request time
           # metadata (always useful when deduping data).
           application/json: |
+            #set($context.requestOverride.header.Content-Type =
+              'text/plain;base64')
             #set($context.requestOverride.path.key =
               'id=' + $context.requestId)
             #set($context.requestOverride.header.x-amz-meta-request-time =
@@ -330,51 +364,40 @@ Resources:
           ResourcePath: "/*"
           ThrottlingBurstLimit: 5000
           ThrottlingRateLimit: 10000.0
+          DataTraceEnabled:
+            Fn::If:
+              - ShouldEnableDataTrace
+              - True
+              - False
+          LoggingLevel:
+            Fn::If:
+              - ShouldEnableDataTrace
+              - INFO
+              - !Ref AWS::NoValue
 
   IngressRestApiMainLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       RetentionInDays: 30
       LogGroupName: /aws/apigateway/data_platform-ingress/main
+      KmsKeyId:
+        Fn::If:
+          - ShouldUseDataPlatformKmsKey
+          - Fn::ImportValue: DataPlatformKeyId
+          - !Ref AWS::NoValue
 
-  IngressRestApiDebugStage:
-    Type: AWS::ApiGateway::Stage
-    Condition: ShouldCreateDebugStage
-    DependsOn:
-      - ApiGatewayAccount
+  IngressRestApiMainDevelopmentUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
     Properties:
-      StageName: debug
+      ApiStages:
+        - ApiId: !Ref IngressRestApi
+          Stage: !Ref IngressRestApiMainStage
       Description: >-
-        Debug stage of the data_platform-ingress REST API, configured with
-        extra Cloudwatch logs.
-      RestApiId: !Ref IngressRestApi
-      DeploymentId: !Ref IngressRestApiDeployment
-      AccessLogSetting:
-        DestinationArn: !GetAtt IngressRestApiDebugLogGroup.Arn
-        Format:
-          '
-          {
-            "requestId": "$context.requestId",
-            "ip": "$context.identity.sourceIp",
-            "caller": "$context.identity.caller",
-            "user": "$context.identity.user",
-            "requestTime": "$context.requestTime",
-            "httpMethod": "$context.httpMethod",
-            "resourcePath": "$context.resourcePath",
-            "status": "$context.status",
-            "protocol": "$context.protocol",
-            "responseLength": "$context.responseLength"
-          }
-          '
-      MethodSettings:
-        - HttpMethod: "*"
-          ResourcePath: "/*"
-          DataTraceEnabled: True
-          LoggingLevel: INFO
-
-  IngressRestApiDebugLogGroup:
-    Type: AWS::Logs::LogGroup
-    Condition: ShouldCreateDebugStage
-    Properties:
-      RetentionInDays: 30
-      LogGroupName: /aws/apigateway/data_platform-ingress/debug
+        Default usage plan for development purposes only.
+      Quota:
+        Limit: 500
+        Period: MONTH
+      Throttle:
+        BurstLimit: 20
+        RateLimit: 10
+      UsagePlanName: data_platform-ingress-development
