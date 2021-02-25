@@ -244,7 +244,7 @@ Resources:
               # in the request mapping (prior to being forwarded to the
               # integration).
               - "/{key}"
-        Credentials: !GetAtt IngressRestApiTableNamePutRole.Arn
+        Credentials: !GetAtt IngressRestApiTableNamePutObjectRole.Arn
         RequestParameters:
           # Get all forwarded parameters from the request:
           integration.request.header.Content-Disposition: >-
@@ -310,10 +310,10 @@ Resources:
                 }
 
   # A Role allowing to PutObjects to the IngressBucket.
-  IngressRestApiTableNamePutRole:
+  IngressRestApiTableNamePutObjectRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: IngressRestApiTableNamePutRole
+      RoleName: IngressRestApiTableNamePutObject
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
