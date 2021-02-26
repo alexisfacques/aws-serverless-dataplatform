@@ -27,7 +27,7 @@ Parameters:
     Default: "False"
     Type: String
 
-  EnableDataPlatformEncryption:
+  EnableEncryption:
     Description: >-
       Create and use a KMS Key to encrypt all log, S3 and at-rest SQS data
       throughout the data platform. Not free-tier compliant: Key creation cost
@@ -54,7 +54,7 @@ Conditions:
   ShouldUseDataPlatformKmsKey:
     Fn::Equals:
       - "True"
-      - !Ref EnableDataPlatformEncryption
+      - !Ref EnableEncryption
 
 Outputs:
 
@@ -103,7 +103,7 @@ Resources:
         # Create and put logs to Cloudwatch log groups.
         # A managed copy of the AmazonAPIGatewayPushToCloudWatchLogs policy
         # document.
-        - PolicyName: ApiGatewayAccountLogWrite
+        - PolicyName: LogWrite
           PolicyDocument:
             Statement:
             - Effect: Allow
@@ -125,6 +125,18 @@ Resources:
                       - ":"
                       - !Ref AWS::AccountId
                       - ":*"
+        - Fn::If:
+          - ShouldUseDataPlatformKmsKey
+          - PolicyName: KmsAccess
+            PolicyDocument:
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - kms:GenerateDataKey
+                    - kms:Decrypt
+                  Resource:
+                    - Fn::ImportValue: DataPlatformKeyArn
+          - !Ref AWS::NoValue
 
   # The RestApi itself. ApiGatewayV2 HTTP APIs are far more straightforward,
   # cheaper to operate (??) and easy to configure, but can only integrate with
@@ -244,7 +256,7 @@ Resources:
               # in the request mapping (prior to being forwarded to the
               # integration).
               - "/{key}"
-        Credentials: !GetAtt IngressRestApiTableNamePutObjectRole.Arn
+        Credentials: !GetAtt IngressRestApiTableNameObjectPostRole.Arn
         RequestParameters:
           # Get all forwarded parameters from the request:
           integration.request.header.Content-Disposition: >-
@@ -310,10 +322,10 @@ Resources:
                 }
 
   # A Role allowing to PutObjects to the IngressBucket.
-  IngressRestApiTableNamePutObjectRole:
+  IngressRestApiTableNameObjectPostRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: IngressRestApiTableNamePutObject
+      RoleName: IngressRestApiTableNameObjectPostRole
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -325,7 +337,7 @@ Resources:
               - sts:AssumeRole
       Path: "/"
       Policies:
-        - PolicyName: IngressRestApiTableNamePutBucketList
+        - PolicyName: S3ListBucket
           PolicyDocument:
             Statement:
               - Effect: Allow
@@ -333,7 +345,7 @@ Resources:
                   - s3:ListBucket
                 Resource:
                   - Fn::ImportValue: IngressBucketArn
-        - PolicyName: IngressRestApiTableNamePutBucketWrite
+        - PolicyName: S3Write
           PolicyDocument:
             Statement:
               - Effect: Allow
@@ -344,6 +356,18 @@ Resources:
                       - ""
                       - - Fn::ImportValue: IngressBucketArn
                         - "/*"
+        - Fn::If:
+          - ShouldUseDataPlatformKmsKey
+          - PolicyName: KmsAccess
+            PolicyDocument:
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - kms:GenerateDataKey
+                    - kms:Decrypt
+                  Resource:
+                    - Fn::ImportValue: DataPlatformKeyArn
+          - !Ref AWS::NoValue
 
   IngressRestApiDeployment:
     DependsOn:
@@ -406,7 +430,7 @@ Resources:
       KmsKeyId:
         Fn::If:
           - ShouldUseDataPlatformKmsKey
-          - Fn::ImportValue: DataPlatformKeyId
+          - Fn::ImportValue: DataPlatformKeyArn
           - !Ref AWS::NoValue
 
   IngressRestApiMainDevelopmentUsagePlan:

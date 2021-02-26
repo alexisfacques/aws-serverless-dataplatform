@@ -9,7 +9,7 @@ Description: >-
 
 Parameters:
 
-  EnableDataPlatformEncryption:
+  EnableEncryption:
     Description: >-
       Create and use a KMS Key to encrypt all log, S3 and at-rest SQS data
       throughout the data platform. Not free-tier compliant: Key creation cost
@@ -26,7 +26,7 @@ Conditions:
   ShouldUseDataPlatformKmsKey:
     Fn::Equals:
       - "True"
-      - !Ref EnableDataPlatformEncryption
+      - !Ref EnableEncryption
 
 Outputs:
 
@@ -94,6 +94,65 @@ Resources:
                   SSEAlgorithm: aws:kms
               - BucketKeyEnabled: False
 
+  IngressBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref IngressBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: IngressBucketPolicy
+        Statement:
+          - Sid: DenyNonRootToDeleteObject
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                Fn::Join:
+                  - ""
+                  - - "arn:aws:iam::"
+                    - !Ref AWS::AccountId
+                    - ":root"
+            Action:
+              - s3:DeleteObject
+            Resource:
+              Fn::Join:
+                - ""
+                - - "arn:aws:s3:::"
+                  - !Ref IngressBucket
+                  - "/*"
+          - Fn::If:
+              - ShouldUseDataPlatformKmsKey
+              - Sid: DenySseS3EncryptedPutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref IngressBucket
+                      - "/*"
+                Condition:
+                  StringEquals:
+                    s3:x-amz-server-side-encryption: AES256
+              - !Ref AWS::NoValue
+          - Fn::If:
+              - ShouldUseDataPlatformKmsKey
+              - Sid: DenyNonKmsEncryptedS3PutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref IngressBucket
+                      - "/*"
+                Condition:
+                  StringNotLikeIfExists:
+                    s3:x-amz-server-side-encryption-aws-kms-key-id:
+                      Fn::ImportValue: DataPlatformKeyArn
+              - !Ref AWS::NoValue
+
   # All valid JSON data from IngressBucket will be here partitionned by table
   # name and date processed based on the Object's metdata.
   # TODO: Invalid JSON data to be tagged and indexed in DynamoDB.
@@ -116,6 +175,65 @@ Resources:
                   SSEAlgorithm: aws:kms
               - BucketKeyEnabled: False
 
+  JsonBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref JsonBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: JsonBucketPolicy
+        Statement:
+          - Sid: DenyNonRootToDeleteObject
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                Fn::Join:
+                  - ""
+                  - - "arn:aws:iam::"
+                    - !Ref AWS::AccountId
+                    - ":root"
+            Action:
+              - s3:DeleteObject
+            Resource:
+              Fn::Join:
+                - ""
+                - - "arn:aws:s3:::"
+                  - !Ref JsonBucket
+                  - "/*"
+          - Fn::If:
+              - ShouldUseDataPlatformKmsKey
+              - Sid: DenySseS3EncryptedPutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref JsonBucket
+                      - "/*"
+                Condition:
+                  StringEquals:
+                    s3:x-amz-server-side-encryption: AES256
+              - !Ref AWS::NoValue
+          - Fn::If:
+              - ShouldUseDataPlatformKmsKey
+              - Sid: DenyNonKmsEncryptedS3PutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref JsonBucket
+                      - "/*"
+                Condition:
+                  StringNotLikeIfExists:
+                    s3:x-amz-server-side-encryption-aws-kms-key-id:
+                      Fn::ImportValue: DataPlatformKeyArn
+              - !Ref AWS::NoValue
+
   # All valid data fron JsonBucket (potentially, other data types) will be
   # transformed to a flat json structure (simillar to a dataframe).
   DataframeBucket:
@@ -137,6 +255,65 @@ Resources:
                   SSEAlgorithm: aws:kms
               - BucketKeyEnabled: False
 
+  DataframeBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataframeBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: DataframeBucketPolicy
+        Statement:
+          - Sid: DenyNonRootToDeleteObject
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                Fn::Join:
+                  - ""
+                  - - "arn:aws:iam::"
+                    - !Ref AWS::AccountId
+                    - ":root"
+            Action:
+              - s3:DeleteObject
+            Resource:
+              Fn::Join:
+                - ""
+                - - "arn:aws:s3:::"
+                  - !Ref DataframeBucket
+                  - "/*"
+          - Fn::If:
+              - ShouldUseDataPlatformKmsKey
+              - Sid: DenySseS3EncryptedPutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref DataframeBucket
+                      - "/*"
+                Condition:
+                  StringEquals:
+                    s3:x-amz-server-side-encryption: AES256
+              - !Ref AWS::NoValue
+          - Fn::If:
+              - ShouldUseDataPlatformKmsKey
+              - Sid: DenyNonKmsEncryptedS3PutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref DataframeBucket
+                      - "/*"
+                Condition:
+                  StringNotLikeIfExists:
+                    s3:x-amz-server-side-encryption-aws-kms-key-id:
+                      Fn::ImportValue: DataPlatformKeyArn
+              - !Ref AWS::NoValue
+
 ###############################################################################
 # \/                       EventTrail configuration                        \/ #
 ###############################################################################
@@ -149,6 +326,11 @@ Resources:
       - LogsBucketPolicy
     Properties:
       TrailName: lake-events-trail
+      KMSKeyId:
+        Fn::If:
+          - ShouldUseDataPlatformKmsKey
+          - Fn::ImportValue: DataPlatformKeyArn
+          - !Ref AWS::NoValue
       S3BucketName: !Ref LogsBucket
       IsLogging: true
       IsMultiRegionTrail: false
@@ -203,7 +385,7 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Sid: AWSCloudTrailS3AclCheck
+          - Sid: AllowAWSCloudTrailS3AclCheck
             Effect: Allow
             Principal:
               Service: cloudtrail.amazonaws.com
@@ -213,7 +395,7 @@ Resources:
                   - ""
                   - - "arn:aws:s3:::"
                     - !Ref LogsBucket
-          - Sid: AWSCloudTrailS3Write
+          - Sid: AllowAWSCloudTrailS3PutObject
             Effect: Allow
             Principal:
               Service: cloudtrail.amazonaws.com
@@ -229,6 +411,56 @@ Resources:
             Condition:
               StringEquals:
                 s3:x-amz-acl: bucket-owner-full-control
+          - Sid: DenyNonRootToDeleteObject
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                Fn::Join:
+                  - ""
+                  - - "arn:aws:iam::"
+                    - !Ref AWS::AccountId
+                    - ":root"
+            Action:
+              - s3:DeleteObject
+            Resource:
+              Fn::Join:
+                - ""
+                - - "arn:aws:s3:::"
+                  - !Ref LogsBucket
+                  - "/*"
+          - Fn::If:
+              - ShouldUseDataPlatformKmsKey
+              - Sid: DenySseS3EncryptedPutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref LogsBucket
+                      - "/*"
+                Condition:
+                  StringEquals:
+                    s3:x-amz-server-side-encryption: AES256
+              - !Ref AWS::NoValue
+          - Fn::If:
+              - ShouldUseDataPlatformKmsKey
+              - Sid: DenyNonKmsEncryptedS3PutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref LogsBucket
+                      - "/*"
+                Condition:
+                  StringNotLikeIfExists:
+                    s3:x-amz-server-side-encryption-aws-kms-key-id:
+                      Fn::ImportValue: DataPlatformKeyArn
+              - !Ref AWS::NoValue
 
 ###############################################################################
 # \/                   IngestObject lambda configuration                   \/ #
@@ -271,7 +503,7 @@ Resources:
       KmsKeyId:
         Fn::If:
           - ShouldUseDataPlatformKmsKey
-          - Fn::ImportValue: DataPlatformKeyId
+          - Fn::ImportValue: DataPlatformKeyArn
           - !Ref AWS::NoValue
 
   # Allow the IngestObjectFunction lambda function to write to Cloudwatch,
@@ -292,7 +524,7 @@ Resources:
       Path: "/"
       Policies:
         # Create and put logs to Cloudwatch log groups.
-        - PolicyName: IngestObjectFunctionLogsWrite
+        - PolicyName: LogsWrite
           PolicyDocument:
             Statement:
               - Effect: Allow
@@ -310,7 +542,7 @@ Resources:
                         - ":"
                         - !Ref AWS::AccountId
                         - ":*"
-        - PolicyName: IngestObjectFunctionQueueReadWrite
+        - PolicyName: SqsConsumer
           PolicyDocument:
             Statement:
               - Effect: Allow
@@ -321,7 +553,7 @@ Resources:
                   - sqs:GetQueue*
                 Resource:
                   - !GetAtt IngestObjectQueue.Arn
-        - PolicyName: IngestObjectFunctionS3List
+        - PolicyName: S3ListBucket
           PolicyDocument:
             Statement:
               - Effect: Allow
@@ -337,7 +569,7 @@ Resources:
                       - - "arn:aws:s3:::"
                         - !Ref JsonBucket
         # Get objects from the IngressBucket S3 bucket.
-        - PolicyName: IngestObjectFunctionS3Read
+        - PolicyName: S3Read
           PolicyDocument:
             Statement:
               - Effect: Allow
@@ -350,7 +582,7 @@ Resources:
                         - !Ref IngressBucket
                         - "/*"
         # Put objects to the lake JsonBucket S3 bucket.
-        - PolicyName: IngestObjectFunctionS3Write
+        - PolicyName: S3Write
           PolicyDocument:
             Statement:
               - Effect: Allow
@@ -362,7 +594,21 @@ Resources:
                       - - "arn:aws:s3:::"
                         - !Ref JsonBucket
                         - "/*"
-
+        - Fn::If:
+            - ShouldUseDataPlatformKmsKey
+            - PolicyName: KmsAccess
+              PolicyDocument:
+                Statement:
+                  - Effect: Allow
+                    Action:
+                      - kms:Encrypt*
+                      - kms:Decrypt*
+                      - kms:ReEncrypt*
+                      - kms:GenerateDataKey*
+                      - kms:Describe*
+                    Resource:
+                      - Fn::ImportValue: DataPlatformKeyArn
+            - !Ref AWS::NoValue
   #
   IngestObjectFunctionEventSourceMapping:
     Type: AWS::Lambda::EventSourceMapping
@@ -515,7 +761,7 @@ Resources:
       KmsKeyId:
         Fn::If:
           - ShouldUseDataPlatformKmsKey
-          - Fn::ImportValue: DataPlatformKeyId
+          - Fn::ImportValue: DataPlatformKeyArn
           - !Ref AWS::NoValue
 
   # Allow the FlattenJsonFunction lambda function to write to Cloudwatch,
@@ -536,7 +782,7 @@ Resources:
       Path: "/"
       Policies:
         # Create and put logs to Cloudwatch log groups.
-        - PolicyName: FlattenJsonFunctionLogsWrite
+        - PolicyName: LogsWrite
           PolicyDocument:
             Statement:
               - Effect: Allow
@@ -555,7 +801,7 @@ Resources:
                         - !Ref AWS::AccountId
                         - ":*"
         # Invoked by / read, write, delete from SQS Queue.
-        - PolicyName: FlattenJsonFunctionQueueReadWrite
+        - PolicyName: SqsConsumer
           PolicyDocument:
             Statement:
               - Effect: Allow
@@ -566,7 +812,7 @@ Resources:
                   - sqs:GetQueue*
                 Resource:
                   - !GetAtt FlattenJsonQueue.Arn
-        - PolicyName: FlattenJsonFunctionS3List
+        - PolicyName: S3List
           PolicyDocument:
             Statement:
               - Effect: Allow
@@ -582,7 +828,7 @@ Resources:
                       - - "arn:aws:s3:::"
                         - !Ref DataframeBucket
         # Get objects from the lake JsonBucket.
-        - PolicyName: FlattenJsonFunctionS3Read
+        - PolicyName: S3Read
           PolicyDocument:
             Statement:
               - Effect: Allow
@@ -595,7 +841,7 @@ Resources:
                         - !Ref JsonBucket
                         - "/*"
         # Put objects to the lake DataframeBucket.
-        - PolicyName: FlattenJsonFunctionS3Write
+        - PolicyName: S3Write
           PolicyDocument:
             Statement:
               - Effect: Allow
@@ -607,6 +853,21 @@ Resources:
                       - - "arn:aws:s3:::"
                         - !Ref DataframeBucket
                         - "/*"
+        - Fn::If:
+            - ShouldUseDataPlatformKmsKey
+            - PolicyName: KmsAccess
+              PolicyDocument:
+                Statement:
+                  - Effect: Allow
+                    Action:
+                      - kms:Encrypt*
+                      - kms:Decrypt*
+                      - kms:ReEncrypt*
+                      - kms:GenerateDataKey*
+                      - kms:Describe*
+                    Resource:
+                      - Fn::ImportValue: DataPlatformKeyArn
+            - !Ref AWS::NoValue
 
   #
   FlattenJsonFunctionEventSourceMapping:
@@ -631,6 +892,7 @@ Resources:
           - ShouldUseDataPlatformKmsKey
           - Fn::ImportValue: DataPlatformKeyId
           - !Ref AWS::NoValue
+
   #
   FlattenJsonQueuePolicy:
     Type: AWS::SQS::QueuePolicy
@@ -708,6 +970,7 @@ Resources:
           - ShouldUseDataPlatformKmsKey
           - Fn::ImportValue: DataPlatformKeyId
           - !Ref AWS::NoValue
+
   #
   FlattenJsonDlqQueueAlarm:
     Type: AWS::CloudWatch::Alarm

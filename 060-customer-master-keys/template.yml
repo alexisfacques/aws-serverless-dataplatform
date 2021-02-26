@@ -7,32 +7,16 @@ Description: >-
   Customer master keys used throughout the data platform if encryption is
   enabled.
 
-Parameters:
-
-  EnableDataPlatformEncryption:
-    Description: >-
-      Create and use a KMS Key to encrypt all log, S3 and at-rest SQS data
-      throughout the data platform. Not free-tier compliant: Key creation cost
-      $1/month with further usage cost. Leave empty if you don't know what
-      you're doing.
-    AllowedValues:
-      - "True"
-      - "False"
-    Default: "False"
-    Type: String
-
-Conditions:
-
-  ShouldCreateKmsKeys:
-    Fn::Equals:
-      - "True"
-      - !Ref EnableDataPlatformEncryption
-
 Outputs:
 
+  DataPlatformKeyArn:
+    Description: The KMS key ARN used by all data platform services, if any.
+    Value: !GetAtt DataPlatformKey.Arn
+    Export:
+      Name: DataPlatformKeyArn
+
   DataPlatformKeyId:
-    Description: The KMS key used by all data platform services, if any.
-    Condition: ShouldCreateKmsKeys
+    Description: The KMS key id used by all data platform services, if any.
     Value: !Ref DataPlatformKey
     Export:
       Name: DataPlatformKeyId
@@ -45,21 +29,63 @@ Resources:
 
   DataPlatformKey:
     Type: AWS::KMS::Key
-    Condition: ShouldCreateKmsKeys
     Properties:
       EnableKeyRotation: True
       KeyPolicy:
         Version: "2012-10-17"
         Id: data-platform-services
         Statement:
-        - Sid: Enable IAM User Permissions
-          Effect: Allow
-          Principal:
-            AWS:
-              Fn::Join:
-              - ""
-              - - "arn:aws:iam::"
-                - !Ref AWS::AccountId
-                - ":root"
-          Action: kms:*
-          Resource: "*"
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Join:
+                - ""
+                - - "arn:aws:iam::"
+                  - !Ref AWS::AccountId
+                  - ":root"
+            Action: kms:*
+            Resource: "*"
+          - Sid: Enable CloudWatch Permissions
+            Effect: Allow
+            Principal:
+              Service:
+                Fn::Sub: logs.${AWS::Region}.amazonaws.com
+            Action:
+              - kms:Encrypt*
+              - kms:Decrypt*
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:Describe*
+            Resource: "*"
+            Condition:
+              ArnLike:
+                kms:EncryptionContext:aws:logs:arn:
+                  Fn::Join:
+                    - ":"
+                    - - "arn:aws:logs"
+                      - !Ref AWS::Region
+                      - !Ref AWS::AccountId
+                      - "*"
+          - Sid: Enable CloudTrail permissions
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action:
+              - kms:Encrypt*
+              - kms:Decrypt*
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:Describe*
+            Resource: "*"
+          - Sid: Enable Eventbridge permissions
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - kms:Encrypt*
+              - kms:Decrypt*
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:Describe*
+            Resource: "*"

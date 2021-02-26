@@ -9,22 +9,22 @@ Description: >-
 
 Outputs:
 
-  DataPlatformUserPoolArn:
+  UserPoolArn:
     Description: The data platform Cognito user pool ARN.
-    Value: !GetAtt DataPlatformUserPool.Arn
+    Value: !GetAtt UserPool.Arn
     Export:
-      Name: DataPlatformUserPoolArn
+      Name: UserPoolArn
 
-  DataPlatformUserPoolId:
+  UserPoolId:
     Description: The data platform Cognito user pool id.
-    Value: !Ref DataPlatformUserPool
+    Value: !Ref UserPool
     Export:
-      Name: DataPlatformUserPoolId
+      Name: UserPoolId
 
 Resources:
 
   #
-  DataPlatformUserPool:
+  UserPool:
     Type: AWS::Cognito::UserPool
     Properties:
       UserPoolName: data_platform-user_pool
@@ -44,9 +44,9 @@ Resources:
           Required: True
 
   #
-  DataPlatformUserPoolClient:
+  UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
     Properties:
       ClientName: data_platform-user_pool-client
-      UserPoolId: !Ref DataPlatformUserPool
+      UserPoolId: !Ref UserPool
       GenerateSecret: True
