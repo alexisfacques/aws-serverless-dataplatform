@@ -9,13 +9,18 @@ Description: >-
 
 Parameters:
 
-  EnableApiAuthorization:
+  ApiAuthorizerArn:
     Description: >-
-      Leave empty
-    AllowedValues:
-      - "True"
-      - "False"
-    Default: 'False'
+      The ARN of the Api Authorizer that the ApiGateway ingress API will
+      activate for all deployed methods. This can either be a Lambda ARN which
+      will be used as a CUSTOM REQUEST Authorizer, or a Cognito UserPool ARN.
+      Setting this parameter to "NONE" will disable Authorization.
+    AllowedPattern:
+      "^(NONE|arn:(aws[a-zA-Z-]*)?:lambda:[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\
+       \\d{1}:\\d{12}:function:[a-zA-Z0-9-_]+|arn:(aws[a-zA-Z-]*)?:cognito-idp\
+       :[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\\d{1}:\\d{12}:userpool/[a-zA-Z0-9\
+       -_]+)$"
+    Default: "NONE"
     Type: String
 
   EnableApiIntegrationLogs:
@@ -27,34 +32,36 @@ Parameters:
     Default: "False"
     Type: String
 
-  EnableEncryption:
+  KmsKeyArn:
     Description: >-
-      Create and use a KMS Key to encrypt all log, S3 and at-rest SQS data
-      throughout the data platform. Not free-tier compliant: Key creation cost
-      $1/month with further usage cost. Leave empty if you don't know what
-      you're doing.
-    AllowedValues:
-      - "True"
-      - "False"
-    Default: "False"
+      The ARN of the customer master key that will be used to encrypt the data
+      plaform data.
+      Setting this parameter to "NONE" will disable encryption.
+    AllowedPattern:
+      "^(NONE|arn:(aws[a-zA-Z-]*)?:kms:[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\\d\
+       {1}:\\d{12}:key/[0-9a-fA-F]{8}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{4}\\-[0-9\
+       a-fA-F]{4}\\-[0-9a-fA-F]{12})$"
+    Default: "NONE"
     Type: String
 
 Conditions:
 
   ShouldEnableAuthorization:
-    Fn::Equals:
-      - "True"
-      - !Ref EnableApiAuthorization
+    Fn::Not:
+      - Fn::Equals:
+          - "NONE"
+          - !Ref ApiAuthorizerArn
 
   ShouldEnableDataTrace:
     Fn::Equals:
       - "True"
       - !Ref EnableApiIntegrationLogs
 
-  ShouldUseDataPlatformKmsKey:
-    Fn::Equals:
-      - "True"
-      - !Ref EnableEncryption
+  ShouldEnableEncryption:
+    Fn::Not:
+      - Fn::Equals:
+          - "NONE"
+          - !Ref KmsKeyArn
 
 Outputs:
 
@@ -126,7 +133,7 @@ Resources:
                       - !Ref AWS::AccountId
                       - ":*"
         - Fn::If:
-          - ShouldUseDataPlatformKmsKey
+          - ShouldEnableEncryption
           - PolicyName: KmsAccess
             PolicyDocument:
               Statement:
@@ -135,7 +142,7 @@ Resources:
                     - kms:GenerateDataKey
                     - kms:Decrypt
                   Resource:
-                    - Fn::ImportValue: DataPlatformKeyArn
+                    - !Ref KmsKeyArn
           - !Ref AWS::NoValue
 
   # The RestApi itself. ApiGatewayV2 HTTP APIs are far more straightforward,
@@ -357,7 +364,7 @@ Resources:
                       - - Fn::ImportValue: IngressBucketArn
                         - "/*"
         - Fn::If:
-          - ShouldUseDataPlatformKmsKey
+          - ShouldEnableEncryption
           - PolicyName: KmsAccess
             PolicyDocument:
               Statement:
@@ -366,7 +373,7 @@ Resources:
                     - kms:GenerateDataKey
                     - kms:Decrypt
                   Resource:
-                    - Fn::ImportValue: DataPlatformKeyArn
+                    - !Ref KmsKeyArn
           - !Ref AWS::NoValue
 
   IngressRestApiDeployment:
@@ -429,8 +436,8 @@ Resources:
       LogGroupName: /aws/apigateway/data_platform-ingress/main
       KmsKeyId:
         Fn::If:
-          - ShouldUseDataPlatformKmsKey
-          - Fn::ImportValue: DataPlatformKeyArn
+          - ShouldEnableEncryption
+          - !Ref KmsKeyArn
           - !Ref AWS::NoValue
 
   IngressRestApiMainDevelopmentUsagePlan:
@@ -460,6 +467,6 @@ Resources:
       IdentitySource: method.request.header.Authorization
       # IdentityValidationExpression: String
       ProviderARNs:
-        - Fn::ImportValue: DataPlatformUserPoolArn
+        - !Ref ApiAuthorizerArn
       RestApiId: !Ref IngressRestApi
       Type: COGNITO_USER_POOLS

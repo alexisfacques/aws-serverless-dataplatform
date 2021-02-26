@@ -1,0 +1,151 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Transform:
+  - AWS::Serverless-2016-10-31
+
+Description: >-
+  A fully serverless and cost efficient data platform framework allowing you
+  to ingest JSON data at full speed to AWS Athena.
+
+Parameters:
+
+  EnableEncryption:
+    Description: >-
+      Configure resources to use a KMS Key to encrypt all log, S3 and at-rest
+      SQS data throughout the data platform. You can either use your own key or
+      let these Cloudformation templates create one for you. Not free-tier
+      compliant: Key creation cost $1/month with further usage cost. Leave
+      empty if you don't know what you're doing.
+    AllowedValues:
+      - "True"
+      - "False"
+    Default: "False"
+    Type: String
+
+  KmsKeyArn:
+    Description: >-
+      (Optional) If EnableEncryption is set to "True", the ARN of your external
+      customer master key that will be used to encrypt the data plaform data.
+      Set to "NONE" to create a new data platform specific KMS Key.
+    AllowedPattern:
+      "^(NONE|arn:(aws[a-zA-Z-]*)?:kms:[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\\d\
+       {1}:\\d{12}:key/[0-9a-fA-F]{8}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{4}\\-[0-9\
+       a-fA-F]{4}\\-[0-9a-fA-F]{12})$"
+    Default: "NONE"
+    Type: String
+
+  EnableApiAuthorization:
+    Description: >-
+      Create an authorization layer that the ApiGateway ingress API activates
+      for all deployed methods. You can either use your own external CUSTOM
+      REQUEST Lambda authorizer, your own Cognito UserPool, or let these
+      Cloudformation templates create a new Cognito UserPool for you.
+      /!\ If set to "False", all ingress API methods, including PutObject
+      integrations, will be exposed without Authorization to Internet traffic.
+    AllowedValues:
+      - True
+      - "True"
+      - False
+      - "False"
+    Default: "False"
+    Type: String
+
+  ApiAuthorizerArn:
+    Description: >-
+      (Optional) If EnableApiAuthorization is set to "True", the ARN of your
+      external Api Authorizer. This can either be a Lambda ARN which will be
+      used as a CUSTOM REQUEST Authorizer, or a Cognito UserPool ARN.
+      Set to "NONE" to create a new data platform specific Cognito UserPool.
+    AllowedPattern:
+      "^(NONE|arn:(aws[a-zA-Z-]*)?:lambda:[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\
+       \\d{1}:\\d{12}:function:[a-zA-Z0-9-_]+|arn:(aws[a-zA-Z-]*)?:cognito-idp\
+       :[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\\d{1}:\\d{12}:userpool/[a-zA-Z0-9\
+       -_]+)$"
+    Default: "NONE"
+    Type: String
+
+Conditions:
+
+  ShouldDeployCognitoUserPool:
+    Fn::And:
+      - Fn::Equals:
+          - "True"
+          - !Ref EnableApiAuthorization
+      - Fn::Equals:
+          - "NONE"
+          - !Ref ApiAuthorizerArn
+
+  ShouldDeployDataPlatformKmsKey:
+    Fn::And:
+      - Fn::Equals:
+          - "True"
+          - !Ref EnableEncryption
+      - Fn::Equals:
+          - "NONE"
+          - !Ref KmsKeyArn
+
+  ShouldEnableApiAuthorization:
+    Fn::Equals:
+      - "True"
+      - !Ref EnableApiAuthorization
+
+  ShouldEnableEncryption:
+    Fn::Equals:
+      - "True"
+      - !Ref EnableEncryption
+
+Resources:
+
+  LambdaDependencies:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: ./050-lambda-dependencies/template.yml
+
+  CustomerMasterKeys:
+    Type: AWS::Serverless::Application
+    Condition: ShouldDeployDataPlatformKmsKey
+    Properties:
+      Location: ./060-customer-master-keys/template.yml
+
+  Lake:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: ./100-lake/template.yml
+      Parameters:
+        KmsKeyArn:
+          Fn::If:
+            - ShouldEnableEncryption
+            - Fn::If:
+               - ShouldDeployDataPlatformKmsKey
+               - !GetAtt CustomerMasterKeys.Outputs.DataPlatformKeyArn
+               - !Ref KmsKeyArn
+            - NONE
+
+  UserPool:
+    Type: AWS::Serverless::Application
+    Condition: ShouldDeployCognitoUserPool
+    Properties:
+      Location: ./150-user-pool/template.yml
+
+  Ingress:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: ./200-ingress/template.yml
+      Parameters:
+        EnableApiIntegrationLogs: "False"
+        KmsKeyArn:
+          Fn::If:
+            - ShouldEnableEncryption
+            - Fn::If:
+               - ShouldDeployDataPlatformKmsKey
+               - !GetAtt CustomerMasterKeys.Outputs.DataPlatformKeyArn
+               - !Ref KmsKeyArn
+            - NONE
+        ApiAuthorizerArn:
+          Fn::If:
+            - ShouldEnableApiAuthorization
+            - Fn::If:
+               - ShouldDeployCognitoUserPool
+               - !GetAtt UserPool.Outputs.UserPoolArn
+               - !Ref ApiAuthorizerArn
+            - NONE

@@ -7,10 +7,6 @@ Description: >-
   Lambda layers containing custom Python libraries and other shared
   dependencies.
 
-# Parameters:
-
-# Conditions:
-
 Outputs:
 
   EventsPythonUtilsLayerVersionArn:
