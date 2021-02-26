@@ -109,6 +109,7 @@ Resources:
 
   Lake:
     Type: AWS::Serverless::Application
+    DependsOn: LambdaDependencies
     Properties:
       Location: ./100-lake/template.yml
       Parameters:
@@ -129,6 +130,7 @@ Resources:
 
   Ingress:
     Type: AWS::Serverless::Application
+    DependsOn: Lake
     Properties:
       Location: ./200-ingress/template.yml
       Parameters:
