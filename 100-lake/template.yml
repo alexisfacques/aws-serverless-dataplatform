@@ -93,10 +93,14 @@ Resources:
                   KMSMasterKeyID:
                     # Get the ID from the KMS ARN.
                     Fn::Select:
-                      - 5
+                      - 1
                       - Fn::Split:
-                          - ":"
-                          - !Ref KmsKeyArn
+                          - "/"
+                          - Fn::Select:
+                              - 5
+                              - Fn::Split:
+                                  - ":"
+                                  - !Ref KmsKeyArn
                   SSEAlgorithm: aws:kms
               - BucketKeyEnabled: False
 
@@ -179,10 +183,14 @@ Resources:
                   KMSMasterKeyID:
                     # Get the ID from the KMS ARN.
                     Fn::Select:
-                      - 5
+                      - 1
                       - Fn::Split:
-                          - ":"
-                          - !Ref KmsKeyArn
+                          - "/"
+                          - Fn::Select:
+                              - 5
+                              - Fn::Split:
+                                  - ":"
+                                  - !Ref KmsKeyArn
                   SSEAlgorithm: aws:kms
               - BucketKeyEnabled: False
 
@@ -264,10 +272,14 @@ Resources:
                   KMSMasterKeyID:
                     # Get the ID from the KMS ARN.
                     Fn::Select:
-                      - 5
+                      - 1
                       - Fn::Split:
-                          - ":"
-                          - !Ref KmsKeyArn
+                          - "/"
+                          - Fn::Select:
+                              - 5
+                              - Fn::Split:
+                                  - ":"
+                                  - !Ref KmsKeyArn
                   SSEAlgorithm: aws:kms
               - BucketKeyEnabled: False
 
@@ -390,10 +402,14 @@ Resources:
                   KMSMasterKeyID:
                     # Get the ID from the KMS ARN.
                     Fn::Select:
-                      - 5
+                      - 1
                       - Fn::Split:
-                          - ":"
-                          - !Ref KmsKeyArn
+                          - "/"
+                          - Fn::Select:
+                              - 5
+                              - Fn::Split:
+                                  - ":"
+                                  - !Ref KmsKeyArn
                   SSEAlgorithm: aws:kms
               - BucketKeyEnabled: False
 
@@ -652,10 +668,14 @@ Resources:
         Fn::If:
           - ShouldEnableEncryption
           - Fn::Select:
-              - 5
+              - 1
               - Fn::Split:
-                  - ":"
-                  - !Ref KmsKeyArn
+                  - "/"
+                  - Fn::Select:
+                      - 5
+                      - Fn::Split:
+                          - ":"
+                          - !Ref KmsKeyArn
           - !Ref AWS::NoValue
   #
   IngestObjectQueuePolicy:
@@ -731,10 +751,14 @@ Resources:
         Fn::If:
           - ShouldEnableEncryption
           - Fn::Select:
-              - 5
+              - 1
               - Fn::Split:
-                  - ":"
-                  - !Ref KmsKeyArn
+                  - "/"
+                  - Fn::Select:
+                      - 5
+                      - Fn::Split:
+                          - ":"
+                          - !Ref KmsKeyArn
           - !Ref AWS::NoValue
   #
   IngestObjectDlqQueueAlarm:
@@ -920,10 +944,14 @@ Resources:
         Fn::If:
           - ShouldEnableEncryption
           - Fn::Select:
-              - 5
+              - 1
               - Fn::Split:
-                  - ":"
-                  - !Ref KmsKeyArn
+                  - "/"
+                  - Fn::Select:
+                      - 5
+                      - Fn::Split:
+                          - ":"
+                          - !Ref KmsKeyArn
           - !Ref AWS::NoValue
 
   #
@@ -1002,10 +1030,14 @@ Resources:
         Fn::If:
           - ShouldEnableEncryption
           - Fn::Select:
-              - 5
+              - 1
               - Fn::Split:
-                  - ":"
-                  - !Ref KmsKeyArn
+                  - "/"
+                  - Fn::Select:
+                      - 5
+                      - Fn::Split:
+                          - ":"
+                          - !Ref KmsKeyArn
           - !Ref AWS::NoValue
 
   #

@@ -50,3 +50,6 @@ Resources:
       ClientName: data_platform-user_pool-client
       UserPoolId: !Ref UserPool
       GenerateSecret: True
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH

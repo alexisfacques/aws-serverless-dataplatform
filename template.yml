@@ -101,11 +101,11 @@ Resources:
     Properties:
       Location: ./050-lambda-dependencies/template.yml
 
-  CustomerMasterKeys:
+  EncryptionKey:
     Type: AWS::Serverless::Application
     Condition: ShouldDeployDataPlatformKmsKey
     Properties:
-      Location: ./060-customer-master-keys/template.yml
+      Location: ./060-encryption-key/template.yml
 
   Lake:
     Type: AWS::Serverless::Application
@@ -118,7 +118,7 @@ Resources:
             - ShouldEnableEncryption
             - Fn::If:
                - ShouldDeployDataPlatformKmsKey
-               - !GetAtt CustomerMasterKeys.Outputs.DataPlatformKeyArn
+               - !GetAtt EncryptionKey.Outputs.DataPlatformKeyArn
                - !Ref KmsKeyArn
             - NONE
 
@@ -140,7 +140,7 @@ Resources:
             - ShouldEnableEncryption
             - Fn::If:
                - ShouldDeployDataPlatformKmsKey
-               - !GetAtt CustomerMasterKeys.Outputs.DataPlatformKeyArn
+               - !GetAtt EncryptionKey.Outputs.DataPlatformKeyArn
                - !Ref KmsKeyArn
             - NONE
         ApiAuthorizerArn:
