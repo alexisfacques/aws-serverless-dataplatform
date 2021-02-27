@@ -100,6 +100,14 @@ Resources:
     Properties:
       Location: ./010-encryption-key/template.yml
 
+  CfnMacroLatestLayerVersion:
+    Type: AWS::Serverless::Application
+    Metadata:
+      NestedPackageBucketName: >-
+        aws-sam-cli-managed-default-samclisourcebucket-1u017r05ihmw0
+    Properties:
+      Location: ./020-cfn-macro-latest-layer-version/packaged.yml
+
   LambdaDependencies:
     Type: AWS::Serverless::Application
     Metadata:

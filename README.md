@@ -41,6 +41,15 @@
   - **boto3** (1.16.8+);
 - **AWS SAM CLI** (0.47.0+).
 
+### Troubleshooting / Limitations
+
+- This project contains git submodules. Make sure to pull all submodules using `submodule update`:
+  ```sh
+  git submodule update --init --recursive
+  ```
+
+- The AWS SAM CLI has a [known limitation](https://github.com/aws/aws-sam-cli/issues/1470), being unable to properly build AWS Lambdas (and other Local File System builds) in nested applications.
+
 ### CloudFormation configuration
 
 #### Required capabilities
