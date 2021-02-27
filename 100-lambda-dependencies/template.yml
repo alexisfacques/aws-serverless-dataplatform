@@ -9,21 +9,65 @@ Description: >-
 
 Outputs:
 
-  EventsPythonUtilsLayerVersionArn:
+  EventsPythonUtilsLayerArn:
     Description: >-
       Lambda LayerVersion ARN. Contains handlers and utilities to use
       Eventbridge events with AWS Lambdas.
-    Value: !Ref EventsPythonUtilsLayerVersion
+    Value:
+      Fn::Join:
+        - ""
+        - - "arn:"
+          - !Ref AWS::Partition
+          - ":logs:"
+          - !Ref AWS::Region
+          - ":"
+          - !Ref AWS::AccountId
+          - ":layer:python-events_utils"
     Export:
       Name: EventsPythonUtilsLayerVersion
 
-  SqsPythonUtilsLayerVersionArn:
+  EventsPythonUtilsLayerVersion:
+    Description: >-
+      Latest Lambda LayerVersion number for the python-events_utils.
+      Only indicative, do not import!
+    Value:
+      Fn::Select:
+          - 7
+          - Fn::Split:
+              - ":"
+              - !Ref EventsPythonUtilsLayerVersion
+    Export:
+      Name: EventsPythonUtilsLayerVersionNumber
+
+  SqsPythonUtilsLayerArn:
     Description: >-
       Lambda LayerVersion ARN. Contains Python handlers and utilities to use
       SQS Queues with AWS Lambdas.
-    Value: !Ref SqsPythonUtilsLayerVersion
+    Value:
+      Fn::Join:
+        - ""
+        - - "arn:"
+          - !Ref AWS::Partition
+          - ":logs:"
+          - !Ref AWS::Region
+          - ":"
+          - !Ref AWS::AccountId
+          - ":layer:python-sqs_utils"
     Export:
-      Name: SqsPythonUtilsLayerVersionArn
+      Name: SqsPythonUtilsLayerArn
+
+  SqsPythonUtilsLayerVersion:
+    Description: >-
+      Latest Lambda LayerVersion number for the python-sqs_utils.
+      Only indicative, do not import!
+    Value:
+      Fn::Select:
+          - 7
+          - Fn::Split:
+              - ":"
+              - !Ref SqsPythonUtilsLayerVersion
+    Export:
+      Name: SqsPythonUtilsLayerVersionNumber
 
 Resources:
 

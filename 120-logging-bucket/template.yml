@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Transform:
+  - AWS::Serverless-2016-10-31
+
+Description: >-
+  S3 bucket and bucket policy that shares AWS Services logging.
+
+Parameters:
+
+  KmsKeyArn:
+    Description: >-
+      The ARN of the customer master key that will be used to encrypt the data
+      plaform data.
+      Setting this parameter to "NONE" will disable encryption.
+    AllowedPattern:
+      "^(NONE|arn:(aws[a-zA-Z-]*)?:kms:[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\\d\
+       {1}:\\d{12}:key/[0-9a-fA-F]{8}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{4}\\-[0-9\
+       a-fA-F]{4}\\-[0-9a-fA-F]{12})$"
+    Default: "NONE"
+    Type: String
+
+Conditions:
+
+  ShouldEnableEncryption:
+    Fn::Not:
+      - Fn::Equals:
+          - "NONE"
+          - !Ref KmsKeyArn
+
+Outputs:
+
+  LogsBucketArn:
+    Description: >-
+      Bucket ARN. A bucket to use for AWS Services logging.
+    Value:
+      Fn::Join:
+        - ""
+        - - "arn:aws:s3:::"
+          - !Ref LogsBucket
+    Export:
+      Name: LogsBucketArn
+
+  LogsBucketName:
+    Description: >-
+      Bucket name. A bucket to use for AWS Services logging.
+    Value: !Ref LogsBucket
+    Export:
+      Name: LogsBucketName
+
+Resources:
+
+###############################################################################
+# \/                        S3 buckets configuration                       \/ #
+###############################################################################
+
+  # This is the bucket to which CloudTrail will log all S3 lake activity.
+  LogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Join:
+          - "-"
+          - - !Ref AWS::AccountId
+            - "lake-logs"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - Fn::If:
+              - ShouldEnableEncryption
+              - BucketKeyEnabled: True
+                ServerSideEncryptionByDefault:
+                  KMSMasterKeyID:
+                    # Get the ID from the KMS ARN.
+                    Fn::Select:
+                      - 1
+                      - Fn::Split:
+                          - "/"
+                          - Fn::Select:
+                              - 5
+                              - Fn::Split:
+                                  - ":"
+                                  - !Ref KmsKeyArn
+                  SSEAlgorithm: aws:kms
+              - BucketKeyEnabled: False
+
+  # This grants permissions for CloudTrail to write files to the
+  # LogsBucket bucket.
+  LogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LogsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowAWSCloudTrailS3AclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource:
+              - Fn::Join:
+                  - ""
+                  - - "arn:aws:s3:::"
+                    - !Ref LogsBucket
+          - Sid: AllowAWSCloudTrailS3PutObject
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource:
+              - Fn::Join:
+                  - ""
+                  - - "arn:aws:s3:::"
+                    - !Ref LogsBucket
+                    - "/AWSLogs/"
+                    - !Ref AWS::AccountId
+                    - "/*"
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+          - Sid: DenyNonRootToDeleteObject
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                Fn::Join:
+                  - ""
+                  - - "arn:aws:iam::"
+                    - !Ref AWS::AccountId
+                    - ":root"
+            Action:
+              - s3:DeleteObject
+            Resource:
+              Fn::Join:
+                - ""
+                - - "arn:aws:s3:::"
+                  - !Ref LogsBucket
+                  - "/*"
+          - Fn::If:
+              - ShouldEnableEncryption
+              - Sid: DenySseS3EncryptedPutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref LogsBucket
+                      - "/*"
+                Condition:
+                  StringEquals:
+                    s3:x-amz-server-side-encryption: AES256
+              - !Ref AWS::NoValue
+          - Fn::If:
+              - ShouldEnableEncryption
+              - Sid: DenyNonKmsEncryptedS3PutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref LogsBucket
+                      - "/*"
+                Condition:
+                  StringNotLikeIfExists:
+                    s3:x-amz-server-side-encryption-aws-kms-key-id:
+                      Ref: KmsKeyArn
+              - !Ref AWS::NoValue

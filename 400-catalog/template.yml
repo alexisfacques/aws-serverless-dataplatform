@@ -6,10 +6,6 @@ Transform:
 Description: >-
   Deploy S3 buckets, and a CloudTrail trail to event off S3 events.
 
-# Parameters:
-
-# Outputs:
-
 Resources:
 
   CatalogWorkGroup:

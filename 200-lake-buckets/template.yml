@@ -1,0 +1,401 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Transform:
+  - AWS::Serverless-2016-10-31
+
+Description: >-
+  S3 lake buckets & CloudTrail trail configuration to event off S3 events.
+
+Parameters:
+
+  KmsKeyArn:
+    Description: >-
+      The ARN of the customer master key that will be used to encrypt the data
+      plaform data.
+      Setting this parameter to "NONE" will disable encryption.
+    AllowedPattern:
+      "^(NONE|arn:(aws[a-zA-Z-]*)?:kms:[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\\d\
+       {1}:\\d{12}:key/[0-9a-fA-F]{8}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{4}\\-[0-9\
+       a-fA-F]{4}\\-[0-9a-fA-F]{12})$"
+    Default: "NONE"
+    Type: String
+
+Conditions:
+
+  ShouldEnableEncryption:
+    Fn::Not:
+      - Fn::Equals:
+          - "NONE"
+          - !Ref KmsKeyArn
+
+Outputs:
+
+  DataframeBucketArn:
+    Description: >-
+      Bucket ARN.
+    Value:
+      Fn::Join:
+        - ""
+        - - "arn:aws:s3:::"
+          - !Ref DataframeBucket
+    Export:
+      Name: DataframeBucketArn
+
+  DataframeBucketName:
+    Description: >-
+      Bucket name.
+    Value: !Ref DataframeBucket
+    Export:
+      Name: DataframeBucketName
+
+  IngressBucketArn:
+    Description: >-
+      Bucket ARN. A bucket in which any data type is to be expected.
+    Value:
+      Fn::Join:
+        - ""
+        - - "arn:aws:s3:::"
+          - !Ref IngressBucket
+    Export:
+      Name: IngressBucketArn
+
+  IngressBucketName:
+    Description: >-
+      Bucket name. A bucket in which any data type is to be expected.
+    Value: !Ref IngressBucket
+    Export:
+      Name: IngressBucketName
+
+  JsonBucketArn:
+    Description: >-
+      Bucket ARN.
+    Value:
+      Fn::Join:
+        - ""
+        - - "arn:aws:s3:::"
+          - !Ref JsonBucket
+    Export:
+      Name: JsonBucketArn
+
+  JsonBucketName:
+    Description: >-
+      Bucket name.
+    Value: !Ref JsonBucket
+    Export:
+      Name: JsonBucketName
+
+Resources:
+
+###############################################################################
+# \/                        S3 buckets configuration                       \/ #
+###############################################################################
+
+  # A bucket in which any data type is to be expected. All files and data
+  # will go through cleaning & validation, before being copied to the JSON
+  # bucket.
+  IngressBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Join:
+          - "-"
+          - - !Ref AWS::AccountId
+            - "lake-ingress"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - Fn::If:
+              - ShouldEnableEncryption
+              - BucketKeyEnabled: True
+                ServerSideEncryptionByDefault:
+                  KMSMasterKeyID:
+                    # Get the ID from the KMS ARN.
+                    Fn::Select:
+                      - 1
+                      - Fn::Split:
+                          - "/"
+                          - Fn::Select:
+                              - 5
+                              - Fn::Split:
+                                  - ":"
+                                  - !Ref KmsKeyArn
+                  SSEAlgorithm: aws:kms
+              - BucketKeyEnabled: False
+
+  IngressBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref IngressBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: IngressBucketPolicy
+        Statement:
+          - Sid: DenyNonRootToDeleteObject
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                Fn::Join:
+                  - ""
+                  - - "arn:aws:iam::"
+                    - !Ref AWS::AccountId
+                    - ":root"
+            Action:
+              - s3:DeleteObject
+            Resource:
+              Fn::Join:
+                - ""
+                - - "arn:aws:s3:::"
+                  - !Ref IngressBucket
+                  - "/*"
+          - Fn::If:
+              - ShouldEnableEncryption
+              - Sid: DenySseS3EncryptedPutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref IngressBucket
+                      - "/*"
+                Condition:
+                  StringEquals:
+                    s3:x-amz-server-side-encryption: AES256
+              - !Ref AWS::NoValue
+          - Fn::If:
+              - ShouldEnableEncryption
+              - Sid: DenyNonKmsEncryptedS3PutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref IngressBucket
+                      - "/*"
+                Condition:
+                  StringNotLikeIfExists:
+                    s3:x-amz-server-side-encryption-aws-kms-key-id:
+                      Ref: KmsKeyArn
+              - !Ref AWS::NoValue
+
+  # All valid JSON data from IngressBucket will be here partitionned by table
+  # name and date processed based on the Object's metdata.
+  # TODO: Invalid JSON data to be tagged and indexed in DynamoDB.
+  JsonBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Join:
+          - "-"
+          - - !Ref AWS::AccountId
+            - "lake-json"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - Fn::If:
+              - ShouldEnableEncryption
+              - BucketKeyEnabled: True
+                ServerSideEncryptionByDefault:
+                  KMSMasterKeyID:
+                    # Get the ID from the KMS ARN.
+                    Fn::Select:
+                      - 1
+                      - Fn::Split:
+                          - "/"
+                          - Fn::Select:
+                              - 5
+                              - Fn::Split:
+                                  - ":"
+                                  - !Ref KmsKeyArn
+                  SSEAlgorithm: aws:kms
+              - BucketKeyEnabled: False
+
+  JsonBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref JsonBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: JsonBucketPolicy
+        Statement:
+          - Sid: DenyNonRootToDeleteObject
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                Fn::Join:
+                  - ""
+                  - - "arn:aws:iam::"
+                    - !Ref AWS::AccountId
+                    - ":root"
+            Action:
+              - s3:DeleteObject
+            Resource:
+              Fn::Join:
+                - ""
+                - - "arn:aws:s3:::"
+                  - !Ref JsonBucket
+                  - "/*"
+          - Fn::If:
+              - ShouldEnableEncryption
+              - Sid: DenySseS3EncryptedPutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref JsonBucket
+                      - "/*"
+                Condition:
+                  StringEquals:
+                    s3:x-amz-server-side-encryption: AES256
+              - !Ref AWS::NoValue
+          - Fn::If:
+              - ShouldEnableEncryption
+              - Sid: DenyNonKmsEncryptedS3PutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref JsonBucket
+                      - "/*"
+                Condition:
+                  StringNotLikeIfExists:
+                    s3:x-amz-server-side-encryption-aws-kms-key-id:
+                      Ref: KmsKeyArn
+              - !Ref AWS::NoValue
+
+  # All valid data fron JsonBucket (potentially, other data types) will be
+  # transformed to a flat json structure (simillar to a dataframe).
+  DataframeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Join:
+          - "-"
+          - - !Ref AWS::AccountId
+            - "lake-dataframe"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - Fn::If:
+              - ShouldEnableEncryption
+              - BucketKeyEnabled: True
+                ServerSideEncryptionByDefault:
+                  KMSMasterKeyID:
+                    # Get the ID from the KMS ARN.
+                    Fn::Select:
+                      - 1
+                      - Fn::Split:
+                          - "/"
+                          - Fn::Select:
+                              - 5
+                              - Fn::Split:
+                                  - ":"
+                                  - !Ref KmsKeyArn
+                  SSEAlgorithm: aws:kms
+              - BucketKeyEnabled: False
+
+  DataframeBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataframeBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: DataframeBucketPolicy
+        Statement:
+          - Sid: DenyNonRootToDeleteObject
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                Fn::Join:
+                  - ""
+                  - - "arn:aws:iam::"
+                    - !Ref AWS::AccountId
+                    - ":root"
+            Action:
+              - s3:DeleteObject
+            Resource:
+              Fn::Join:
+                - ""
+                - - "arn:aws:s3:::"
+                  - !Ref DataframeBucket
+                  - "/*"
+          - Fn::If:
+              - ShouldEnableEncryption
+              - Sid: DenySseS3EncryptedPutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref DataframeBucket
+                      - "/*"
+                Condition:
+                  StringEquals:
+                    s3:x-amz-server-side-encryption: AES256
+              - !Ref AWS::NoValue
+          - Fn::If:
+              - ShouldEnableEncryption
+              - Sid: DenyNonKmsEncryptedS3PutObject
+                Effect: Deny
+                Principal: "*"
+                Action: s3:PutObject
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref DataframeBucket
+                      - "/*"
+                Condition:
+                  StringNotLikeIfExists:
+                    s3:x-amz-server-side-encryption-aws-kms-key-id:
+                      Ref: KmsKeyArn
+              - !Ref AWS::NoValue
+
+###############################################################################
+# \/                       EventTrail configuration                        \/ #
+###############################################################################
+
+  # A trail that specifies the settings for delivery of log data of lake
+  # buckets to the LogsBucket bucket.
+  LakeEventsTrail:
+    Type: AWS::CloudTrail::Trail
+    Properties:
+      TrailName: lake-events-trail
+      KMSKeyId:
+        Fn::If:
+          - ShouldEnableEncryption
+          - Ref: KmsKeyArn
+          - !Ref AWS::NoValue
+      S3BucketName:
+        Fn::ImportValue: LogsBucketName
+      IsLogging: true
+      IsMultiRegionTrail: false
+      EventSelectors:
+        - IncludeManagementEvents: false
+          DataResources:
+            - Type: AWS::S3::Object
+              Values:
+                - Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref IngressBucket
+                      - "/"
+                - Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref JsonBucket
+                      - "/"
+                - Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref DataframeBucket
+                      - "/"
+      IncludeGlobalServiceEvents: false

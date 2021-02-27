@@ -1,0 +1,586 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Transform:
+  - AWS::Serverless-2016-10-31
+
+Description: >-
+  S3 buckets & CloudTrail trail to event off S3 events, and lambda
+  to clean and partition lake data.
+
+Parameters:
+
+  KmsKeyArn:
+    Description: >-
+      The ARN of the customer master key that will be used to encrypt the data
+      plaform data.
+      Setting this parameter to "NONE" will disable encryption.
+    AllowedPattern:
+      "^(NONE|arn:(aws[a-zA-Z-]*)?:kms:[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\\d\
+       {1}:\\d{12}:key/[0-9a-fA-F]{8}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{4}\\-[0-9\
+       a-fA-F]{4}\\-[0-9a-fA-F]{12})$"
+    Default: "NONE"
+    Type: String
+
+Conditions:
+
+  ShouldEnableEncryption:
+    Fn::Not:
+      - Fn::Equals:
+          - "NONE"
+          - !Ref KmsKeyArn
+
+
+Resources:
+
+###############################################################################
+# \/                   IngestObject lambda configuration                   \/ #
+###############################################################################
+# Forward S3 PutObject events from the IngressBucket via CloudTrail to an SQS
+# queue. Invokes a lambda which copies data to a properly partitionned S3
+# bucket given the file-type.
+# Failed SQS messages are put to a DLQ queue.
+
+  #
+  IngestObjectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: lake-ingest_object
+      Description: >-
+        TODO
+      Role:
+        Fn::GetAtt:
+          - IngestObjectFunctionRole
+          - Arn
+      CodeUri: ./ingest_object/
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.8
+      Layers:
+        - Fn::Transform:
+            Name: LatestLayerVersion
+            Parameters:
+              LayerName: python-sqs_utils
+      MemorySize: 128
+      Timeout: 300
+      Environment:
+        Variables:
+          LOG_LEVEL: DEBUG
+          JSON_BUCKET_NAME:
+            Fn::ImportValue: JsonBucketName
+
+  #
+  IngestObjectFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: "/aws/lambda/${IngestObjectFunction}"
+      RetentionInDays: 30
+      KmsKeyId:
+        Fn::If:
+          - ShouldEnableEncryption
+          - !Ref KmsKeyArn
+          - !Ref AWS::NoValue
+
+  # Allow the IngestObjectFunction lambda function to write to Cloudwatch,
+  # read/write to S3, receive and write messages to SQS.
+  IngestObjectFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: IngestObjectFunction
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        # Create and put logs to Cloudwatch log groups.
+        - PolicyName: LogsWrite
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - "arn:"
+                        - !Ref AWS::Partition
+                        - ":logs:"
+                        - !Ref AWS::Region
+                        - ":"
+                        - !Ref AWS::AccountId
+                        - ":*"
+        - PolicyName: SqsConsumer
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueue*
+                Resource:
+                  - !GetAtt IngestObjectQueue.Arn
+        - PolicyName: S3ListBucket
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - Fn::ImportValue: IngressBucketArn
+                  - Fn::ImportValue: JsonBucketArn
+        # Get objects from the IngressBucket S3 bucket.
+        - PolicyName: S3Read
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - Fn::Join:
+                      - "/"
+                      - - Fn::ImportValue: IngressBucketArn
+                        - "*"
+        # Put objects to the lake JsonBucket S3 bucket.
+        - PolicyName: S3Write
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - Fn::Join:
+                      - "/"
+                      - - Fn::ImportValue: JsonBucketArn
+                        - "*"
+        - Fn::If:
+            - ShouldEnableEncryption
+            - PolicyName: KmsAccess
+              PolicyDocument:
+                Statement:
+                  - Effect: Allow
+                    Action:
+                      - kms:Encrypt*
+                      - kms:Decrypt*
+                      - kms:ReEncrypt*
+                      - kms:GenerateDataKey*
+                      - kms:Describe*
+                    Resource:
+                      - !Ref KmsKeyArn
+            - !Ref AWS::NoValue
+  #
+  IngestObjectFunctionEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      Enabled: true
+      EventSourceArn: !GetAtt IngestObjectQueue.Arn
+      FunctionName: !GetAtt IngestObjectFunction.Arn
+
+  #
+  IngestObjectQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: lake-ingest_object
+      VisibilityTimeout: 1800
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt IngestObjectDlqQueue.Arn
+        maxReceiveCount: 1
+      KmsMasterKeyId:
+        Fn::If:
+          - ShouldEnableEncryption
+          - Fn::Select:
+              - 1
+              - Fn::Split:
+                  - "/"
+                  - Fn::Select:
+                      - 5
+                      - Fn::Split:
+                          - ":"
+                          - !Ref KmsKeyArn
+          - !Ref AWS::NoValue
+  #
+  IngestObjectQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref IngestObjectQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: IngestObjectQueuePolicy
+        Statement:
+          - Sid: IngestObjectQueueEventRule
+            Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt IngestObjectQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt IngestObjectQueueEventRule.Arn
+
+  #
+  IngestObjectQueueEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: >-
+        Forward all S3 PutObject events from the IngressBucket to the
+        IngestObjectQueue SQS queue.
+      EventPattern:
+        # Get S3 events via CloudTrail
+        source:
+          - aws.s3
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          # ... of type PutObject
+          eventName:
+            - PutObject
+          # ... from the bucket IngressBucket
+          requestParameters:
+            bucketName:
+              - Fn::ImportValue: IngressBucketName
+          # ... Object prefix/key must unique and properly named.
+            key:
+              - prefix: "id="
+      State: ENABLED
+      Targets:
+        # Forward to IngestObjectFunction lambda function.
+        - Arn: !GetAtt IngestObjectQueue.Arn
+          Id: IngestObjectQueueRule
+        # Strip event from all useless parameters and craft a new event.
+          InputTransformer:
+            InputPathsMap:
+              bucketName: $.detail.requestParameters.bucketName
+              key: $.detail.requestParameters.key
+            InputTemplate:
+              '
+              {
+                "bucketName": <bucketName>,
+                "key": <key>
+              }
+              '
+
+  #
+  IngestObjectDlqQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: lake-ingest_object-dlq
+      VisibilityTimeout: 900
+      KmsMasterKeyId:
+        Fn::If:
+          - ShouldEnableEncryption
+          - Fn::Select:
+              - 1
+              - Fn::Split:
+                  - "/"
+                  - Fn::Select:
+                      - 5
+                      - Fn::Split:
+                          - ":"
+                          - !Ref KmsKeyArn
+          - !Ref AWS::NoValue
+  #
+  IngestObjectDlqQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: IngestObjectDlqQueueThreshold
+      AlarmDescription:
+        Fn::Sub: ${IngestObjectDlqQueue.QueueName} contains messages.
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt IngestObjectDlqQueue.QueueName
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 300
+      Statistic: Maximum
+      Threshold: 0
+      TreatMissingData: notBreaching
+
+###############################################################################
+# \/                   FlattenJson lambda configuration                    \/ #
+###############################################################################
+
+  FlattenJsonFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: lake-flatten_json
+      Description: >-
+        TODO
+      Role:
+        Fn::GetAtt:
+          - FlattenJsonFunctionRole
+          - Arn
+      CodeUri: ./flatten_json/
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.8
+      Layers:
+        - Fn::Transform:
+            Name: LatestLayerVersion
+            Parameters:
+              LayerName: python-sqs_utils
+      MemorySize: 128
+      Timeout: 300
+      Environment:
+        Variables:
+          LOG_LEVEL: DEBUG
+
+  #
+  FlattenJsonFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: "/aws/lambda/${FlattenJsonFunction}"
+      RetentionInDays: 30
+      KmsKeyId:
+        Fn::If:
+          - ShouldEnableEncryption
+          - !Ref KmsKeyArn
+          - !Ref AWS::NoValue
+
+  # Allow the FlattenJsonFunction lambda function to write to Cloudwatch,
+  # read/write to S3.
+  FlattenJsonFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: FlattenJsonFunction
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        # Create and put logs to Cloudwatch log groups.
+        - PolicyName: LogsWrite
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - "arn:"
+                        - !Ref AWS::Partition
+                        - ":logs:"
+                        - !Ref AWS::Region
+                        - ":"
+                        - !Ref AWS::AccountId
+                        - ":*"
+        # Invoked by / read, write, delete from SQS Queue.
+        - PolicyName: SqsConsumer
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueue*
+                Resource:
+                  - !GetAtt FlattenJsonQueue.Arn
+        - PolicyName: S3List
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - Fn::ImportValue: JsonBucketArn
+                  - Fn::ImportValue: DataframeBucketArn
+        # Get objects from the lake JsonBucket.
+        - PolicyName: S3Read
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - Fn::Join:
+                      - "/"
+                      - - Fn::ImportValue: JsonBucketArn
+                        - "*"
+        # Put objects to the lake DataframeBucket.
+        - PolicyName: S3Write
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - Fn::Join:
+                      - "/"
+                      - - Fn::ImportValue: DataframeBucketArn
+                        - "*"
+        - Fn::If:
+            - ShouldEnableEncryption
+            - PolicyName: KmsAccess
+              PolicyDocument:
+                Statement:
+                  - Effect: Allow
+                    Action:
+                      - kms:Encrypt*
+                      - kms:Decrypt*
+                      - kms:ReEncrypt*
+                      - kms:GenerateDataKey*
+                      - kms:Describe*
+                    Resource:
+                      - !Ref KmsKeyArn
+            - !Ref AWS::NoValue
+
+  #
+  FlattenJsonFunctionEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      Enabled: true
+      EventSourceArn: !GetAtt FlattenJsonQueue.Arn
+      FunctionName: !GetAtt FlattenJsonFunction.Arn
+
+  #
+  FlattenJsonQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: lake-flatten_json
+      VisibilityTimeout: 1800
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt FlattenJsonDlqQueue.Arn
+        maxReceiveCount: 1
+      KmsMasterKeyId:
+        Fn::If:
+          - ShouldEnableEncryption
+          - Fn::Select:
+              - 1
+              - Fn::Split:
+                  - "/"
+                  - Fn::Select:
+                      - 5
+                      - Fn::Split:
+                          - ":"
+                          - !Ref KmsKeyArn
+          - !Ref AWS::NoValue
+
+  #
+  FlattenJsonQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref FlattenJsonQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Id: FlattenJsonQueuePolicy
+        Statement:
+          - Sid: FlattenJsonQueueEventRule
+            Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt FlattenJsonQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt FlattenJsonQueueEventRule.Arn
+
+  #
+  FlattenJsonQueueEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: >-
+        Forward all S3 PutObject events from the JsonBucket to the
+        FlattenJsonQueue SQS queue.
+      EventPattern:
+        # Get S3 events via CloudTrail
+        source:
+          - aws.s3
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          # ... of type PutObject
+          eventName:
+            - PutObject
+          # ... from the bucket IngressBucket
+          requestParameters:
+            bucketName:
+              - Fn::ImportValue: JsonBucketName
+          # ... Object prefix/key must unique and properly partitionned.
+            key:
+              - prefix: "table="
+      State: ENABLED
+      Targets:
+        # Forward to FlattenJsonQueue SQS queue.
+        - Arn: !GetAtt FlattenJsonQueue.Arn
+          Id: FlattenJsonQueue
+        # Strip event from all useless parameters and craft a new event.
+          InputTransformer:
+            InputPathsMap:
+              bucketName: $.detail.requestParameters.bucketName
+              key: $.detail.requestParameters.key
+            InputTemplate:
+              Fn::Sub:
+                - '
+                  {
+                    "targetBucket": "${DataframeBucketName}",
+                    "bucketName": <bucketName>,
+                    "key": <key>
+                  }
+                  '
+                - DataframeBucketName:
+                    Fn::ImportValue: DataframeBucketName
+
+  #
+  FlattenJsonDlqQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: lake-flatten_json-dlq
+      VisibilityTimeout: 900
+      KmsMasterKeyId:
+        Fn::If:
+          - ShouldEnableEncryption
+          - Fn::Select:
+              - 1
+              - Fn::Split:
+                  - "/"
+                  - Fn::Select:
+                      - 5
+                      - Fn::Split:
+                          - ":"
+                          - !Ref KmsKeyArn
+          - !Ref AWS::NoValue
+
+  #
+  FlattenJsonDlqQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: FlattenJsonDlqQueueThreshold
+      AlarmDescription:
+        Fn::Sub: ${FlattenJsonDlqQueue.QueueName} contains messages.
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt FlattenJsonDlqQueue.QueueName
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 300
+      Statistic: Maximum
+      Threshold: 0
+      TreatMissingData: notBreaching

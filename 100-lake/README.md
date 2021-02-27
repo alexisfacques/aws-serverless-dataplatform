@@ -1,3 +1,0 @@
-# Serverless dataplatform - Lake
-
-*TODO*

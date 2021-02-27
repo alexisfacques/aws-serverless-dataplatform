@@ -110,3 +110,5 @@ venv.bak/
 *.csv
 samconfig.toml
 *logs
+packaged.yml
+packaged.yaml

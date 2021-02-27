@@ -1,0 +1,133 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Transform:
+  - AWS::Serverless-2016-10-31
+
+Description: >-
+  Lambdas powering custom CloudFormation macros and custom resources.
+
+Parameters:
+
+  MacroName:
+    Description: >-
+      The name of the macro. The name of the macro must be unique across all
+      macros in the account.
+    Default: "LatestLayerVersion"
+    Type: String
+
+  KmsKeyArn:
+    Description: >-
+      A KMS key that will be used to encrypt logging data. Set to "NONE" to
+      disable logs encryption.
+    AllowedPattern:
+      "^(NONE|arn:(aws[a-zA-Z-]*)?:kms:[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\\d\
+       {1}:\\d{12}:key/[0-9a-fA-F]{8}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{4}\\-[0-9\
+       a-fA-F]{4}\\-[0-9a-fA-F]{12})$"
+    Default: "NONE"
+    Type: String
+
+Conditions:
+
+  ShouldEnableEncryption:
+    Fn::Not:
+      - Fn::Equals:
+          - "NONE"
+          - !Ref KmsKeyArn
+
+Resources:
+
+  MacroFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: cfn_macro-${MacroName}
+      Description:
+        Fn::Sub: >-
+          Invoked by CloudFormation when deploying templates using the
+          "${MacroName}" custom macro: Returns the ARN of the latest
+          AWS LayerVersion available, based on a LayerVersion name or
+          LayerVersion ARN.
+      Role: !GetAtt MacroFunctionRole.Arn
+      CodeUri: ./latest_layer_version_macro/
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.8
+      MemorySize: 128
+      Timeout: 300
+      Environment:
+        Variables:
+          LOG_LEVEL: INFO
+
+  MacroFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DependsOn:
+      - MacroFunction
+    Properties:
+      RetentionInDays: 30
+      LogGroupName:
+        Fn::Sub: "/aws/lambda/${MacroFunction}"
+      KmsKeyId:
+        Fn::If:
+          - ShouldEnableEncryption
+          - !Ref KmsKeyArn
+          - !Ref AWS::NoValue
+
+  MacroFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${MacroName}MacroFunction
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: LambdaListLayerVersions
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:ListLayerVersions
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - "arn:"
+                        - !Ref AWS::Partition
+                        - ":lambda:"
+                        - !Ref AWS::Region
+                        - ":"
+                        - !Ref AWS::AccountId
+                        - ":layer:*"
+        - PolicyName: LogsWrite
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - "arn:"
+                        - !Ref AWS::Partition
+                        - ":logs:"
+                        - !Ref AWS::Region
+                        - ":"
+                        - !Ref AWS::AccountId
+                        - ":*"
+
+  Macro:
+    Type: AWS::CloudFormation::Macro
+    Properties:
+      FunctionName: !Ref MacroFunction
+      Name: !Ref MacroName
+      Description:
+        Fn::Sub: >-
+          The "${MacroName}" returns the ARN of the latest AWS LayerVersion
+          available, based on a LayerVersion name or LayerVersion ARN.

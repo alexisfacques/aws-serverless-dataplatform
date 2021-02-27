@@ -179,7 +179,7 @@ This exampled showed how to programmatically change a UserPool user's password u
 
 ### 2. Publish a document to the data platform
 
-The data platform bundles an ApiGateway endpoint which proxies and directly integrates with S3, to provide a very reliable way of ingesting data at high speed and volume (Please refer to the [Ingress API README](./200-ingress/README.md) for more details).
+The data platform bundles an ApiGateway endpoint which proxies and directly integrates with S3, to provide a very reliable way of ingesting data at high speed and volume (Please refer to the [Ingress API README](./310-ingress/README.md) for more details).
 
 You may do so programmatically using the AWS CLI, as follows:
 
@@ -233,7 +233,7 @@ You may do so programmatically using the AWS CLI, as follows:
   ]
   ```
 
-  The document has been saved base64-encoded. The [lake](./100-lake/README.md) lambda functions will then take over and:
+  The document has been saved base64-encoded. The [lake functions](./210-lake-functions/README.md) functions will then take over and:
     - Validate the document type;
     - Normalize the document structure to be easily parsable in AWS Athena.
 
