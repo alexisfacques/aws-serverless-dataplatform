@@ -144,13 +144,17 @@ def handle_event(event: Dict, *_args, **_kwargs) -> Dict:
         ret: Dict = {
             'table': {
                 'name': (table_name := key_partitions['table']),
-                'location': 's3://%s/table=%s' % (target_bucket, table_name)
+                'location': 's3://%s/table=%s/' % (target_bucket, table_name)
             },
             'partition': {
+                'count': len(PARTITION_KEYS),
                 'keys': PARTITION_KEYS,
                 'values': [key_partitions[k] for k in PARTITION_KEYS]
             },
-            'columns': sorted(s3_body.keys())
+            'columns': {
+                'count': len(s3_body),
+                'keys': sorted(s3_body.keys())
+            }
         }
 
     except Exception as err:

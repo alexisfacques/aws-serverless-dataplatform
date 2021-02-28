@@ -83,565 +83,19 @@ Resources:
                 - Fn::ImportValue: DataframeBucketName
         Name: catalog
 
-
 ###############################################################################
-# \/                    AddColumns lambda configuration                    \/ #
+# \/                  TableManager lambda configuration                    \/ #
 ###############################################################################
 
-  AddColumnsFunction:
+  TableManagerFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: catalog-add_columns
+      FunctionName: catalog-table_manager
       Description: >-
         TODO
       Role:
         Fn::GetAtt:
-          - AddColumnsFunctionRole
-          - Arn
-      CodeUri: ./add_columns/
-      Handler: lambda_function.lambda_handler
-      Runtime: python3.8
-      Layers:
-        - Fn::Transform:
-            Name: LatestLayerVersion
-            Parameters:
-              LayerName: python-sqs_utils
-      MemorySize: 128
-      Timeout: 300
-      Environment:
-        Variables:
-          LOG_LEVEL: DEBUG
-          ATHENA_WORKGROUP: !Ref CatalogWorkGroup
-          GLUE_DATABASE_NAME: !Ref CatalogDatabase
-
-  #
-  AddColumnsFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName:
-        Fn::Sub: "/aws/lambda/${AddColumnsFunction}"
-      RetentionInDays: 30
-      KmsKeyId:
-        Fn::If:
-          - ShouldEnableEncryption
-          - !Ref KmsKeyArn
-          - !Ref AWS::NoValue
-
-  # Allow the AddColumnsFunction lambda function to write to Cloudwatch,
-  # read/write to S3, receive and write messages to SQS.
-  AddColumnsFunctionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: AddColumnsFunction
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - lambda.amazonaws.com
-            Action:
-              - sts:AssumeRole
-      Path: "/"
-      Policies:
-        - Fn::If:
-            - ShouldEnableEncryption
-            - PolicyName: KmsAccess
-              PolicyDocument:
-                Statement:
-                  - Effect: Allow
-                    Action:
-                      - kms:Encrypt*
-                      - kms:Decrypt*
-                      - kms:ReEncrypt*
-                      - kms:GenerateDataKey*
-                      - kms:Describe*
-                    Resource:
-                      - !Ref KmsKeyArn
-            - !Ref AWS::NoValue
-        - PolicyName: AthenaExecution
-          PolicyDocument:
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:ListBucket
-                  - s3:ListBucketMultipartUploads
-                Resource:
-                  - Fn::ImportValue: LogsBucketArn
-              - Effect: Allow
-                Action:
-                  - s3:AbortMultipartUpload
-                  - s3:GetBucketLocation
-                  - s3:GetObject
-                  - s3:PutObject
-                Resource:
-                  - Fn::Join:
-                      - ""
-                      - - Fn::ImportValue: LogsBucketArn
-                        - "/AWSLogs/"
-                        - !Ref AWS::AccountId
-                        - "/Athena/"
-                        - !Ref AWS::Region
-                        - "/*"
-              - Effect: Allow
-                Action:
-                  - athena:GetQueryExecution
-                  - athena:GetQueryResults
-                  - athena:StartQueryExecution
-                  - athena:StopQueryExecution
-                Resource:
-                  - Fn::Join:
-                      - ""
-                      - - "arn:"
-                        - !Ref AWS::Partition
-                        - ":athena:"
-                        - !Ref AWS::Region
-                        - ":"
-                        - !Ref AWS::AccountId
-                        - ":workgroup/"
-                        - !Ref CatalogWorkGroup
-        # Create and put logs to Cloudwatch log groups.
-        - PolicyName: LogsWrite
-          PolicyDocument:
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource:
-                  - Fn::Join:
-                      - ""
-                      - - "arn:"
-                        - !Ref AWS::Partition
-                        - ":logs:"
-                        - !Ref AWS::Region
-                        - ":"
-                        - !Ref AWS::AccountId
-                        - ":*"
-        - PolicyName: SqsConsumer
-          PolicyDocument:
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sqs:SendMessage
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueue*
-                Resource:
-                  - !GetAtt AddColumnsQueue.Arn
-
-  #
-  AddColumnsFunctionEventSourceMapping:
-    Type: AWS::Lambda::EventSourceMapping
-    Properties:
-      BatchSize: 10
-      Enabled: true
-      EventSourceArn: !GetAtt AddColumnsQueue.Arn
-      FunctionName: !GetAtt AddColumnsFunction.Arn
-
-  #
-  AddColumnsQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: catalog-add_columns
-      VisibilityTimeout: 1800
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt AddColumnsDlqQueue.Arn
-        maxReceiveCount: 1
-      KmsMasterKeyId:
-        Fn::If:
-          - ShouldEnableEncryption
-          - Fn::Select:
-              - 1
-              - Fn::Split:
-                  - "/"
-                  - Fn::Select:
-                      - 5
-                      - Fn::Split:
-                          - ":"
-                          - !Ref KmsKeyArn
-          - !Ref AWS::NoValue
-  #
-  AddColumnsQueuePolicy:
-    Type: AWS::SQS::QueuePolicy
-    Properties:
-      Queues:
-        - !Ref AddColumnsQueue
-      PolicyDocument:
-        Version: "2012-10-17"
-        Id: AddColumnsQueuePolicy
-        Statement:
-          - Sid: AddColumnsQueueEventRule
-            Effect: Allow
-            Principal:
-              Service:
-                - events.amazonaws.com
-            Action:
-              - sqs:SendMessage
-            Resource: !GetAtt AddColumnsQueue.Arn
-            Condition:
-              ArnEquals:
-                aws:SourceArn: !GetAtt AddColumnsQueueEventRule.Arn
-
-  #
-  AddColumnsQueueEventRule:
-    Type: AWS::Events::Rule
-    Properties:
-      Description:
-        TODO
-      EventPattern:
-        detail-type:
-          - Fn::FindInMap:
-              - Event
-              - DetailType
-              - CatalogTableStateChange
-        detail:
-          state:
-            - SUCCEEDED
-      State: ENABLED
-      Targets:
-        # Forward to AddColumnsFunction lambda function.
-        - Arn: !GetAtt AddColumnsQueue.Arn
-          Id: AddColumnsQueueRule
-          InputTransformer:
-            InputPathsMap:
-              tableName: $.detail.result.table.name
-              columns: $.detail.result.columns
-            InputTemplate:
-              '
-              {
-                "tableName": <tableName>,
-                "columns": <columns>
-              }
-              '
-
-  #
-  AddColumnsDlqQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: catalog-add_columns-dlq
-      VisibilityTimeout: 900
-      KmsMasterKeyId:
-        Fn::If:
-          - ShouldEnableEncryption
-          - Fn::Select:
-              - 1
-              - Fn::Split:
-                  - "/"
-                  - Fn::Select:
-                      - 5
-                      - Fn::Split:
-                          - ":"
-                          - !Ref KmsKeyArn
-          - !Ref AWS::NoValue
-
-  #
-  AddColumnsDlqQueueAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: AddColumnsDlqQueueThreshold
-      AlarmDescription:
-        Fn::Sub: ${AddColumnsDlqQueue.QueueName} contains messages.
-      ComparisonOperator: GreaterThanThreshold
-      Dimensions:
-        - Name: QueueName
-          Value: !GetAtt AddColumnsDlqQueue.QueueName
-      EvaluationPeriods: 1
-      MetricName: ApproximateNumberOfMessagesVisible
-      Namespace: AWS/SQS
-      Period: 300
-      Statistic: Maximum
-      Threshold: 0
-      TreatMissingData: notBreaching
-
-###############################################################################
-# \/                  AddPartitions lambda configuration                   \/ #
-###############################################################################
-
-  AddPartitionsFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: catalog-add_partitions
-      Description: >-
-        TODO
-      Role:
-        Fn::GetAtt:
-          - AddPartitionsFunctionRole
-          - Arn
-      CodeUri: ./add_partitions/
-      Handler: lambda_function.lambda_handler
-      Runtime: python3.8
-      Layers:
-        - Fn::Transform:
-            Name: LatestLayerVersion
-            Parameters:
-              LayerName: python-sqs_utils
-      MemorySize: 128
-      Timeout: 300
-      Environment:
-        Variables:
-          LOG_LEVEL: DEBUG
-          ATHENA_WORKGROUP: !Ref CatalogWorkGroup
-          GLUE_DATABASE_NAME: !Ref CatalogDatabase
-
-  #
-  AddPartitionsFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName:
-        Fn::Sub: "/aws/lambda/${AddPartitionsFunction}"
-      RetentionInDays: 30
-      KmsKeyId:
-        Fn::If:
-          - ShouldEnableEncryption
-          - !Ref KmsKeyArn
-          - !Ref AWS::NoValue
-
-  # Allow the AddPartitionsFunction lambda function to write to Cloudwatch,
-  # read/write to S3, receive and write messages to SQS.
-  AddPartitionsFunctionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: AddPartitionsFunction
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - lambda.amazonaws.com
-            Action:
-              - sts:AssumeRole
-      Path: "/"
-      Policies:
-        - Fn::If:
-            - ShouldEnableEncryption
-            - PolicyName: KmsAccess
-              PolicyDocument:
-                Statement:
-                  - Effect: Allow
-                    Action:
-                      - kms:Encrypt*
-                      - kms:Decrypt*
-                      - kms:ReEncrypt*
-                      - kms:GenerateDataKey*
-                      - kms:Describe*
-                    Resource:
-                      - !Ref KmsKeyArn
-            - !Ref AWS::NoValue
-        - PolicyName: AthenaExecution
-          PolicyDocument:
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:ListBucket
-                  - s3:ListBucketMultipartUploads
-                Resource:
-                  - Fn::ImportValue: LogsBucketArn
-              - Effect: Allow
-                Action:
-                  - s3:AbortMultipartUpload
-                  - s3:GetBucketLocation
-                  - s3:GetObject
-                  - s3:PutObject
-                Resource:
-                  - Fn::Join:
-                      - ""
-                      - - Fn::ImportValue: LogsBucketArn
-                        - "/AWSLogs/"
-                        - !Ref AWS::AccountId
-                        - "/Athena/"
-                        - !Ref AWS::Region
-                        - "/*"
-              - Effect: Allow
-                Action:
-                  - athena:GetQueryExecution
-                  - athena:GetQueryResults
-                  - athena:StartQueryExecution
-                  - athena:StopQueryExecution
-                Resource:
-                  - Fn::Join:
-                      - ""
-                      - - "arn:"
-                        - !Ref AWS::Partition
-                        - ":athena:"
-                        - !Ref AWS::Region
-                        - ":"
-                        - !Ref AWS::AccountId
-                        - ":workgroup/"
-                        - !Ref CatalogWorkGroup
-        # Create and put logs to Cloudwatch log groups.
-        - PolicyName: LogsWrite
-          PolicyDocument:
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource:
-                  - Fn::Join:
-                      - ""
-                      - - "arn:"
-                        - !Ref AWS::Partition
-                        - ":logs:"
-                        - !Ref AWS::Region
-                        - ":"
-                        - !Ref AWS::AccountId
-                        - ":*"
-        - PolicyName: SqsConsumer
-          PolicyDocument:
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sqs:SendMessage
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueue*
-                Resource:
-                  - !GetAtt AddPartitionsQueue.Arn
-
-  #
-  AddPartitionsFunctionEventSourceMapping:
-    Type: AWS::Lambda::EventSourceMapping
-    Properties:
-      BatchSize: 10
-      Enabled: true
-      EventSourceArn: !GetAtt AddPartitionsQueue.Arn
-      FunctionName: !GetAtt AddPartitionsFunction.Arn
-
-  #
-  AddPartitionsQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: catalog-add_partitions
-      VisibilityTimeout: 1800
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt AddPartitionsDlqQueue.Arn
-        maxReceiveCount: 1
-      KmsMasterKeyId:
-        Fn::If:
-          - ShouldEnableEncryption
-          - Fn::Select:
-              - 1
-              - Fn::Split:
-                  - "/"
-                  - Fn::Select:
-                      - 5
-                      - Fn::Split:
-                          - ":"
-                          - !Ref KmsKeyArn
-          - !Ref AWS::NoValue
-  #
-  AddPartitionsQueuePolicy:
-    Type: AWS::SQS::QueuePolicy
-    Properties:
-      Queues:
-        - !Ref AddPartitionsQueue
-      PolicyDocument:
-        Version: "2012-10-17"
-        Id: AddPartitionsQueuePolicy
-        Statement:
-          - Sid: AddPartitionsQueueEventRule
-            Effect: Allow
-            Principal:
-              Service:
-                - events.amazonaws.com
-            Action:
-              - sqs:SendMessage
-            Resource: !GetAtt AddPartitionsQueue.Arn
-            Condition:
-              ArnEquals:
-                aws:SourceArn: !GetAtt AddPartitionsQueueEventRule.Arn
-
-  #
-  AddPartitionsQueueEventRule:
-    Type: AWS::Events::Rule
-    Properties:
-      Description:
-        TODO
-      EventPattern:
-        detail-type:
-          - Fn::FindInMap:
-              - Event
-              - DetailType
-              - CatalogTableStateChange
-        detail:
-          state:
-            - SUCCEEDED
-      State: ENABLED
-      Targets:
-        # Forward to AddPartitionsFunction lambda function.
-        - Arn: !GetAtt AddPartitionsQueue.Arn
-          Id: AddPartitionsQueueRule
-          InputTransformer:
-            InputPathsMap:
-              tableName: $.detail.result.table.name
-              partitionKeys: $.detail.result.partition.keys
-              partitionValues: $.detail.result.partition.values
-            InputTemplate:
-              '
-              {
-                "tableName": <tableName>,
-                "partitionKeys": <partitionKeys>,
-                "partitionValues": <partitionKeys>
-              }
-              '
-
-  #
-  AddPartitionsDlqQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: catalog-add_partitions-dlq
-      VisibilityTimeout: 900
-      KmsMasterKeyId:
-        Fn::If:
-          - ShouldEnableEncryption
-          - Fn::Select:
-              - 1
-              - Fn::Split:
-                  - "/"
-                  - Fn::Select:
-                      - 5
-                      - Fn::Split:
-                          - ":"
-                          - !Ref KmsKeyArn
-          - !Ref AWS::NoValue
-
-  #
-  AddPartitionsDlqQueueAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: AddPartitionsDlqQueueThreshold
-      AlarmDescription:
-        Fn::Sub: ${AddPartitionsDlqQueue.QueueName} contains messages.
-      ComparisonOperator: GreaterThanThreshold
-      Dimensions:
-        - Name: QueueName
-          Value: !GetAtt AddPartitionsDlqQueue.QueueName
-      EvaluationPeriods: 1
-      MetricName: ApproximateNumberOfMessagesVisible
-      Namespace: AWS/SQS
-      Period: 300
-      Statistic: Maximum
-      Threshold: 0
-      TreatMissingData: notBreaching
-
-
-###############################################################################
-# \/                   CreateTable lambda configuration                    \/ #
-###############################################################################
-
-  CreateTableFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: catalog-create_table
-      Description: >-
-        TODO
-      Role:
-        Fn::GetAtt:
-          - CreateTableFunctionRole
+          - TableManagerFunctionRole
           - Arn
       CodeUri: ./create_table/
       Handler: lambda_function.lambda_handler
@@ -660,11 +114,11 @@ Resources:
           GLUE_DATABASE_NAME: !Ref CatalogDatabase
 
   #
-  CreateTableFunctionLogGroup:
+  TableManagerFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName:
-        Fn::Sub: "/aws/lambda/${CreateTableFunction}"
+        Fn::Sub: "/aws/lambda/${TableManagerFunction}"
       RetentionInDays: 30
       KmsKeyId:
         Fn::If:
@@ -672,12 +126,12 @@ Resources:
           - !Ref KmsKeyArn
           - !Ref AWS::NoValue
 
-  # Allow the CreateTableFunction lambda function to write to Cloudwatch,
+  # Allow the TableManagerFunction lambda function to write to Cloudwatch,
   # read/write to S3, receive and write messages to SQS.
-  CreateTableFunctionRole:
+  TableManagerFunctionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: CreateTableFunction
+      RoleName: TableManagerFunction
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -774,25 +228,27 @@ Resources:
                   - sqs:DeleteMessage
                   - sqs:GetQueue*
                 Resource:
-                  - !GetAtt CreateTableQueue.Arn
+                  - !GetAtt TableManagerQueue.Arn
 
   #
-  CreateTableFunctionEventSourceMapping:
+  TableManagerFunctionEventSourceMapping:
     Type: AWS::Lambda::EventSourceMapping
     Properties:
       BatchSize: 10
       Enabled: true
-      EventSourceArn: !GetAtt CreateTableQueue.Arn
-      FunctionName: !GetAtt CreateTableFunction.Arn
+      EventSourceArn: !GetAtt TableManagerQueue.Arn
+      FunctionName: !GetAtt TableManagerFunction.Arn
 
   #
-  CreateTableQueue:
+  TableManagerQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: catalog-create_table
+      QueueName: catalog-table_manager.fifo
       VisibilityTimeout: 1800
+      ContentBasedDeduplication: True
+      FifoQueue: True
       RedrivePolicy:
-        deadLetterTargetArn: !GetAtt CreateTableDlqQueue.Arn
+        deadLetterTargetArn: !GetAtt TableManagerDlqQueue.Arn
         maxReceiveCount: 1
       KmsMasterKeyId:
         Fn::If:
@@ -808,29 +264,29 @@ Resources:
                           - !Ref KmsKeyArn
           - !Ref AWS::NoValue
   #
-  CreateTableQueuePolicy:
+  TableManagerQueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
       Queues:
-        - !Ref CreateTableQueue
+        - !Ref TableManagerQueue
       PolicyDocument:
         Version: "2012-10-17"
-        Id: CreateTableQueuePolicy
+        Id: TableManagerQueuePolicy
         Statement:
-          - Sid: CreateTableQueueEventRule
+          - Sid: TableManagerQueueEventRule
             Effect: Allow
             Principal:
               Service:
                 - events.amazonaws.com
             Action:
               - sqs:SendMessage
-            Resource: !GetAtt CreateTableQueue.Arn
+            Resource: !GetAtt TableManagerQueue.Arn
             Condition:
               ArnEquals:
-                aws:SourceArn: !GetAtt CreateTableQueueEventRule.Arn
+                aws:SourceArn: !GetAtt TableManagerQueueEventRule.Arn
 
   #
-  CreateTableQueueEventRule:
+  TableManagerQueueEventRule:
     Type: AWS::Events::Rule
     Properties:
       Description:
@@ -846,29 +302,113 @@ Resources:
             - SUCCEEDED
       State: ENABLED
       Targets:
-        # Forward to CreateTableFunction lambda function.
-        - Arn: !GetAtt CreateTableQueue.Arn
-          Id: CreateTableQueueRule
+        - Arn: !GetAtt TableManagerQueue.Arn
+          Id: CreateTableRule
+          SqsParameters:
+            MessageGroupId: CreateTable
           InputTransformer:
             InputPathsMap:
               tableName: $.detail.result.table.name
               tableLocation: $.detail.result.table.location
               partitionKeys: $.detail.result.partition.keys
             InputTemplate:
-              '
-              {
-                "tableName": <tableName>,
-                "tableLocation": <tableLocation>,
-                "partitionKeys": <partitionKeys>
-              }
-              '
+              Fn::Sub:
+                - '
+                    {
+                      "type": "CreateTable",
+                      "queryTemplate": "${QueryTemplate}",
+                      "templateValues": {
+                         "database": "${Database}",
+                         "tableName": <tableName>,
+                         "partitionKeys": <partitionKeys>,
+                         "tableLocation": <tableLocation>,
+                         "isEncrypted": "${IsEncrypted}"
+                      }
+                    }
+                  '
+                - Database: !Ref CatalogDatabase
+                  IsEncrypted:
+                    Fn::If:
+                      - ShouldEnableEncryption
+                      - "true"
+                      - "false"
+                  QueryTemplate: >-
+                    CREATE EXTERNAL TABLE IF NOT EXISTS {{ database }}.{{ tableName
+                    }} PARTITIONED BY ({% for partition in partitionKeys %}{{ partition }} string{%
+                    if not loop.last %}, {% endif %}{% endfor %}) ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
+                    WITH SERDEPROPERTIES ('ignore.malformed.json'='true') LOCATION '{{ tableLocation
+                    }}' TBLPROPERTIES ('has_encrypted_data'='{{ isEncrypted }}');
+#
+        - Arn: !GetAtt TableManagerQueue.Arn
+          Id: SelectMissingColumnsRule
+          SqsParameters:
+            MessageGroupId: SelectMissingColumns
+          InputTransformer:
+            InputPathsMap:
+              tableName: $.detail.result.table.name
+              columns: $.detail.result.columns
+            InputTemplate:
+              Fn::Sub:
+                - '
+                  {
+                    "type": "SelectMissingColumns",
+                    "queryTemplate": "${QueryTemplate}",
+                    "templateValues": {
+                      "database": "${Database}",
+                      "tableName": <tableName>,
+                      "columns": <columns>
+                    }
+                  }
+                  '
+                - Database: !Ref CatalogDatabase
+                  QueryTemplate: >-
+                    SELECT t.column_name
+                    AS columns FROM ( VALUES {% for column in columns %}('{{ column }}'){% if
+                    not loop.last %}, {% endif %}{% endfor %} ) AS t (column_name) WHERE t.column_name
+                    NOT IN ( SELECT column_name FROM information_schema.columns WHERE table_schema
+                    = '{{ database }}' AND table_name = '{{ tableName }}' AND extra_info IS
+                    NULL);
 
-  #
-  CreateTableDlqQueue:
+        - Arn: !GetAtt TableManagerQueue.Arn
+          Id: AddPartitionsRule
+          SqsParameters:
+            MessageGroupId: AddPartitions
+          InputTransformer:
+            InputPathsMap:
+              tableName: $.detail.result.table.name
+              tableLocation: $.detail.result.table.location
+              partitionKeys: $.detail.result.partition.keys
+              partitionValues: $.detail.result.partition.values
+            InputTemplate:
+              Fn::Sub:
+                - '
+                  {
+                    "type": "AddPartitions",
+                    "queryTemplate": "${QueryTemplate}",
+                    "templateValues": {
+                      "database": "${Database}",
+                      "tableName": <tableName>,
+                      "tableLocation": <tableLocation>,
+                      "partitionKeys": <partitionKeys>,
+                      "partitionValues": <partitionValues>
+                    }
+                  }
+                  '
+                - Database: !Ref CatalogDatabase
+                  QueryTemplate: >-
+                    ALTER TABLE {{ database
+                    }}.{{ tableName }} ADD PARTITIONS ( {% for key in partitionKeys %}{{ key }}={{
+                    partitionValues[loop.index-1] }} {% endfor %} ) LOCATION '{{ tableLocation
+                    }}/{% for key in partitionKeys %}{{ key }}={{ partitionValues[loop.index-1]
+                    }}{% if not loop.last %}/{% endif %}{% endfor %}';
+
+  TableManagerDlqQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: catalog-create_table-dlq
+      QueueName: catalog-table_manager-dlq.fifo
       VisibilityTimeout: 900
+      ContentBasedDeduplication: True
+      FifoQueue: True
       KmsMasterKeyId:
         Fn::If:
           - ShouldEnableEncryption
@@ -884,16 +424,16 @@ Resources:
           - !Ref AWS::NoValue
 
   #
-  CreateTableDlqQueueAlarm:
+  TableManagerDlqQueueAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: CreateTableDlqQueueThreshold
+      AlarmName: TableManagerDlqQueueThreshold
       AlarmDescription:
-        Fn::Sub: ${CreateTableDlqQueue.QueueName} contains messages.
+        Fn::Sub: ${TableManagerDlqQueue.QueueName} contains messages.
       ComparisonOperator: GreaterThanThreshold
       Dimensions:
         - Name: QueueName
-          Value: !GetAtt CreateTableDlqQueue.QueueName
+          Value: !GetAtt TableManagerDlqQueue.QueueName
       EvaluationPeriods: 1
       MetricName: ApproximateNumberOfMessagesVisible
       Namespace: AWS/SQS
