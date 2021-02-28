@@ -30,6 +30,15 @@ Conditions:
           - "NONE"
           - !Ref KmsKeyArn
 
+Mappings:
+
+  Event:
+    DetailType:
+      # These events will detail table changes that need to be processed,
+      # including: expected table name, partitions, columns, etc...
+      # They are to be emitted by any function writing objects to the
+      # DataframeBucket.
+      CatalogTableStateChange: Catalog Table State Change
 
 Resources:
 
@@ -331,11 +340,20 @@ Resources:
             Name: LatestLayerVersion
             Parameters:
               LayerName: python-sqs_utils
+        - Fn::Transform:
+            Name: LatestLayerVersion
+            Parameters:
+              LayerName: python-events_utils
       MemorySize: 128
       Timeout: 300
       Environment:
         Variables:
           LOG_LEVEL: DEBUG
+          EVENTBRIDGE_DETAIL_TYPE:
+            Fn::FindInMap:
+              - Event
+              - DetailType
+              - CatalogTableStateChange
 
   #
   FlattenJsonFunctionLogGroup:
@@ -367,6 +385,15 @@ Resources:
               - sts:AssumeRole
       Path: "/"
       Policies:
+        # Create and put events to Cloudwatch events (Eventbridge).
+        - PolicyName: EventsWrite
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource:
+                  - "*"
         # Create and put logs to Cloudwatch log groups.
         - PolicyName: LogsWrite
           PolicyDocument:
