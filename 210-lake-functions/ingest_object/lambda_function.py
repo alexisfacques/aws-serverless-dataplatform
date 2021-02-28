@@ -105,7 +105,7 @@ def handle_event(event: Dict, *_args, **_kwargs) -> Dict:
     try:
         # Get partition keys from S3 object metadata.
         metadata = s3_object.get('Metadata', {})
-        request_time = datetime.strptime(metadata['request-time'], CLF_FORMAT)
+        request_time = datetime.strptime(metadata['requestTime'], CLF_FORMAT)
         table = metadata['table']
 
         # Repartition file given its metadata

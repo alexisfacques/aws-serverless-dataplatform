@@ -4,23 +4,60 @@ Transform:
   - AWS::Serverless-2016-10-31
 
 Description: >-
-  Deploy S3 buckets, and a CloudTrail trail to event off S3 events.
+  Deploy an Athena WorkGroup and Lambda functions that will keep your
+  Athena tables, and data catalog up-to-date.
+
+Parameters:
+
+  KmsKeyArn:
+    Description: >-
+      The ARN of the KMS key that will be used to encrypt data services, such
+      as CloudWatch LogGroups, S3 Buckets, SQS Queues...
+      Setting this parameter to "NONE" will disable encryption for resources
+      in this stack.
+    AllowedPattern:
+      "^(NONE|arn:(aws[a-zA-Z-]*)?:kms:[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\\d\
+       {1}:\\d{12}:key/[0-9a-fA-F]{8}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{4}\\-[0-9\
+       a-fA-F]{4}\\-[0-9a-fA-F]{12})$"
+    Default: "NONE"
+    Type: String
+
+Conditions:
+
+  ShouldEnableEncryption:
+    Fn::Not:
+      - Fn::Equals:
+          - "NONE"
+          - !Ref KmsKeyArn
 
 Resources:
 
   CatalogWorkGroup:
     Type: AWS::Athena::WorkGroup
     Properties:
-      Name: catalog
+      Name: data_platform-catalog
+      Description: >-
+        An AWS Athena WorkGroup used by the data platform catalog Lambda
+        functions to run maintenance queries on the lake external tables.
       State: ENABLED
       WorkGroupConfiguration:
-        BytesScannedCutoffPerQuery: 500000000
-        EnforceWorkGroupConfiguration: true
-        PublishCloudWatchMetricsEnabled: true
-        RequesterPaysEnabled: true
+        EnforceWorkGroupConfiguration: True
+        PublishCloudWatchMetricsEnabled: True
+        RequesterPaysEnabled: False
         ResultConfiguration:
+          EncryptionConfiguration:
+            Fn::If:
+              - ShouldEnableEncryption
+              - EncryptionOption: SSE_KMS
+                KmsKey: !Ref KmsKeyArn
+              - !Ref AWS::NoValue
           OutputLocation:
             Fn::Join:
               - ""
-              - - "s3://user-scratch-space-"
-                - !Ref EnvironmentName
+              - - "s3://"
+                - Fn::ImportValue: LogsBucketName
+                - "/AWSLogs/"
+                - !Ref AWS::AccountId
+                - "/Athena/"
+                - !Ref AWS::Region
+                - "/"

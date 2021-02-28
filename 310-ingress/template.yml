@@ -12,9 +12,10 @@ Parameters:
   ApiAuthorizerArn:
     Description: >-
       The ARN of the Api Authorizer that the ApiGateway ingress API will
-      activate for all deployed methods. This can either be a Lambda ARN which
-      will be used as a CUSTOM REQUEST Authorizer, or a Cognito UserPool ARN.
-      Setting this parameter to "NONE" will disable Authorization.
+      activate for all deployed methods in this stack. This can either be a
+      Lambda ARN which will be used as a CUSTOM REQUEST Authorizer, or a
+      Cognito UserPool ARN.
+      Setting this parameter to "NONE" will disable ApiGateway Authorization.
     AllowedPattern:
       "^(NONE|arn:(aws[a-zA-Z-]*)?:lambda:[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\
        \\d{1}:\\d{12}:function:[a-zA-Z0-9-_]+|arn:(aws[a-zA-Z-]*)?:cognito-idp\
@@ -34,9 +35,10 @@ Parameters:
 
   KmsKeyArn:
     Description: >-
-      The ARN of the customer master key that will be used to encrypt the data
-      plaform data.
-      Setting this parameter to "NONE" will disable encryption.
+      The ARN of the KMS key that will be used to encrypt data services, such
+      as CloudWatch LogGroups, S3 Buckets, SQS Queues...
+      Setting this parameter to "NONE" will disable encryption for resources
+      in this stack.
     AllowedPattern:
       "^(NONE|arn:(aws[a-zA-Z-]*)?:kms:[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\\d\
        {1}:\\d{12}:key/[0-9a-fA-F]{8}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{4}\\-[0-9\
@@ -274,18 +276,19 @@ Resources:
             method.request.header.x-amz-tagging
           integration.request.path.tableName: >-
             method.request.path.tableName
-          # Set Object custom metadata using the x-amz-meta- headers:
-          integration.request.header.x-amz-meta-table: >-
-            method.request.path.tableName
         RequestTemplates:
           # Key definition as described above, as well as the request time
           # metadata (always useful when deduping data).
           application/json: |
             #set($context.requestOverride.header.Content-Type =
               'text/plain;base64')
+
             #set($context.requestOverride.path.key =
               'id=' + $context.requestId)
-            #set($context.requestOverride.header.x-amz-meta-request-time =
+
+            #set($context.requestOverride.header.x-amz-meta-table =
+              $input.params().path.tableName.toLowerCase())
+            #set($context.requestOverride.header.x-amz-meta-requestTime =
               $context.requestTime)
 
             $input.body
@@ -305,7 +308,7 @@ Resources:
             # e.g. a 4xx error in this case could be a misconfigured IAM role.
             SelectionPattern: "[4-5]\\d{2}"
             ResponseTemplates:
-              # Some Apache VML hacks to get a proper JSON response. There's
+              # Some Apache VTL hacks to get a proper JSON response. There's
               # propably a better way to do so.
               application/json: |
                 #set ($e = $input.body.toString())

@@ -1,1 +1,0 @@
-logmatic-python==0.1.7

@@ -11,9 +11,10 @@ Parameters:
 
   KmsKeyArn:
     Description: >-
-      The ARN of the customer master key that will be used to encrypt the data
-      plaform data.
-      Setting this parameter to "NONE" will disable encryption.
+      The ARN of the KMS key that will be used to encrypt data services, such
+      as CloudWatch LogGroups, S3 Buckets, SQS Queues...
+      Setting this parameter to "NONE" will disable encryption for resources
+      in this stack.
     AllowedPattern:
       "^(NONE|arn:(aws[a-zA-Z-]*)?:kms:[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\\d\
        {1}:\\d{12}:key/[0-9a-fA-F]{8}\\-[0-9a-fA-F]{4}\\-[0-9a-fA-F]{4}\\-[0-9\
