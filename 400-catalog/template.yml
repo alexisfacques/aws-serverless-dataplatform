@@ -84,20 +84,20 @@ Resources:
         Name: catalog
 
 ###############################################################################
-# \/                  TableManager lambda configuration                    \/ #
+# \/                  AthenaExecutor lambda configuration                    \/ #
 ###############################################################################
 
-  TableManagerFunction:
+  AthenaExecutorFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: catalog-table_manager
+      FunctionName: catalog-athena_executor
       Description: >-
         TODO
       Role:
         Fn::GetAtt:
-          - TableManagerFunctionRole
+          - AthenaExecutorFunctionRole
           - Arn
-      CodeUri: ./create_table/
+      CodeUri: ./athena_executor/
       Handler: lambda_function.lambda_handler
       Runtime: python3.8
       Layers:
@@ -105,6 +105,10 @@ Resources:
             Name: LatestLayerVersion
             Parameters:
               LayerName: python-sqs_utils
+        - Fn::Transform:
+            Name: LatestLayerVersion
+            Parameters:
+              LayerName: python-events_utils
       MemorySize: 128
       Timeout: 300
       Environment:
@@ -114,11 +118,11 @@ Resources:
           GLUE_DATABASE_NAME: !Ref CatalogDatabase
 
   #
-  TableManagerFunctionLogGroup:
+  AthenaExecutorFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName:
-        Fn::Sub: "/aws/lambda/${TableManagerFunction}"
+        Fn::Sub: "/aws/lambda/${AthenaExecutorFunction}"
       RetentionInDays: 30
       KmsKeyId:
         Fn::If:
@@ -126,12 +130,12 @@ Resources:
           - !Ref KmsKeyArn
           - !Ref AWS::NoValue
 
-  # Allow the TableManagerFunction lambda function to write to Cloudwatch,
+  # Allow the AthenaExecutorFunction lambda function to write to Cloudwatch,
   # read/write to S3, receive and write messages to SQS.
-  TableManagerFunctionRole:
+  AthenaExecutorFunctionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: TableManagerFunction
+      RoleName: AthenaExecutorFunction
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -161,6 +165,31 @@ Resources:
         - PolicyName: AthenaExecution
           PolicyDocument:
             Statement:
+              - Effect: Allow
+                Action:
+                  - glue:GetTable*
+                  - glue:GetPartition*
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - "arn:"
+                        - !Ref AWS::Partition
+                        - ":glue:"
+                        - !Ref AWS::Region
+                        - ":"
+                        - !Ref AWS::AccountId
+                        - ":catalog"
+                  - Fn::Join:
+                      - ""
+                      - - "arn:"
+                        - !Ref AWS::Partition
+                        - ":glue:"
+                        - !Ref AWS::Region
+                        - ":"
+                        - !Ref AWS::AccountId
+                        - ":database/"
+                        - !Ref CatalogDatabase
+
               - Effect: Allow
                 Action:
                   - s3:ListBucket
@@ -228,27 +257,27 @@ Resources:
                   - sqs:DeleteMessage
                   - sqs:GetQueue*
                 Resource:
-                  - !GetAtt TableManagerQueue.Arn
+                  - !GetAtt AthenaExecutorQueue.Arn
 
   #
-  TableManagerFunctionEventSourceMapping:
+  AthenaExecutorFunctionEventSourceMapping:
     Type: AWS::Lambda::EventSourceMapping
     Properties:
       BatchSize: 10
       Enabled: true
-      EventSourceArn: !GetAtt TableManagerQueue.Arn
-      FunctionName: !GetAtt TableManagerFunction.Arn
+      EventSourceArn: !GetAtt AthenaExecutorQueue.Arn
+      FunctionName: !GetAtt AthenaExecutorFunction.Arn
 
   #
-  TableManagerQueue:
+  AthenaExecutorQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: catalog-table_manager.fifo
+      QueueName: catalog-athena_executor.fifo
       VisibilityTimeout: 1800
       ContentBasedDeduplication: True
       FifoQueue: True
       RedrivePolicy:
-        deadLetterTargetArn: !GetAtt TableManagerDlqQueue.Arn
+        deadLetterTargetArn: !GetAtt AthenaExecutorDlqQueue.Arn
         maxReceiveCount: 1
       KmsMasterKeyId:
         Fn::If:
@@ -264,29 +293,29 @@ Resources:
                           - !Ref KmsKeyArn
           - !Ref AWS::NoValue
   #
-  TableManagerQueuePolicy:
+  AthenaExecutorQueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
       Queues:
-        - !Ref TableManagerQueue
+        - !Ref AthenaExecutorQueue
       PolicyDocument:
         Version: "2012-10-17"
-        Id: TableManagerQueuePolicy
+        Id: AthenaExecutorQueuePolicy
         Statement:
-          - Sid: TableManagerQueueEventRule
+          - Sid: AthenaExecutorQueueEventRule
             Effect: Allow
             Principal:
               Service:
                 - events.amazonaws.com
             Action:
               - sqs:SendMessage
-            Resource: !GetAtt TableManagerQueue.Arn
+            Resource: !GetAtt AthenaExecutorQueue.Arn
             Condition:
               ArnEquals:
-                aws:SourceArn: !GetAtt TableManagerQueueEventRule.Arn
+                aws:SourceArn: !GetAtt AthenaExecutorQueueEventRule.Arn
 
   #
-  TableManagerQueueEventRule:
+  AthenaExecutorQueueEventRule:
     Type: AWS::Events::Rule
     Properties:
       Description:
@@ -302,7 +331,7 @@ Resources:
             - SUCCEEDED
       State: ENABLED
       Targets:
-        - Arn: !GetAtt TableManagerQueue.Arn
+        - Arn: !GetAtt AthenaExecutorQueue.Arn
           Id: CreateTableRule
           SqsParameters:
             MessageGroupId: CreateTable
@@ -339,7 +368,7 @@ Resources:
                     WITH SERDEPROPERTIES ('ignore.malformed.json'='true') LOCATION '{{ tableLocation
                     }}' TBLPROPERTIES ('has_encrypted_data'='{{ isEncrypted }}');
 #
-        - Arn: !GetAtt TableManagerQueue.Arn
+        - Arn: !GetAtt AthenaExecutorQueue.Arn
           Id: SelectMissingColumnsRule
           SqsParameters:
             MessageGroupId: SelectMissingColumns
@@ -369,7 +398,7 @@ Resources:
                     = '{{ database }}' AND table_name = '{{ tableName }}' AND extra_info IS
                     NULL);
 
-        - Arn: !GetAtt TableManagerQueue.Arn
+        - Arn: !GetAtt AthenaExecutorQueue.Arn
           Id: AddPartitionsRule
           SqsParameters:
             MessageGroupId: AddPartitions
@@ -402,10 +431,10 @@ Resources:
                     }}/{% for key in partitionKeys %}{{ key }}={{ partitionValues[loop.index-1]
                     }}{% if not loop.last %}/{% endif %}{% endfor %}';
 
-  TableManagerDlqQueue:
+  AthenaExecutorDlqQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: catalog-table_manager-dlq.fifo
+      QueueName: catalog-athena_executor-dlq.fifo
       VisibilityTimeout: 900
       ContentBasedDeduplication: True
       FifoQueue: True
@@ -424,16 +453,16 @@ Resources:
           - !Ref AWS::NoValue
 
   #
-  TableManagerDlqQueueAlarm:
+  AthenaExecutorDlqQueueAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: TableManagerDlqQueueThreshold
+      AlarmName: AthenaExecutorDlqQueueThreshold
       AlarmDescription:
-        Fn::Sub: ${TableManagerDlqQueue.QueueName} contains messages.
+        Fn::Sub: ${AthenaExecutorDlqQueue.QueueName} contains messages.
       ComparisonOperator: GreaterThanThreshold
       Dimensions:
         - Name: QueueName
-          Value: !GetAtt TableManagerDlqQueue.QueueName
+          Value: !GetAtt AthenaExecutorDlqQueue.QueueName
       EvaluationPeriods: 1
       MetricName: ApproximateNumberOfMessagesVisible
       Namespace: AWS/SQS
