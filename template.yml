@@ -111,7 +111,7 @@ Resources:
   LoggingBucket:
     Type: AWS::Serverless::Application
     Properties:
-      Location: ./120-logging-bucket/template.yml
+      Location: ./110-logging-bucket/template.yml
       Parameters:
         KmsKeyArn:
           Fn::If:

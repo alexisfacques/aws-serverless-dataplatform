@@ -105,7 +105,7 @@ def handle_event(event: Dict, *_args, **_kwargs) -> Dict:
     try:
         # Get partition keys from S3 object metadata.
         metadata = s3_object.get('Metadata', {})
-        request_time = datetime.strptime(metadata['requestTime'], CLF_FORMAT)
+        request_time = datetime.strptime(metadata['requesttime'], CLF_FORMAT)
         table = metadata['table']
 
         # Repartition file given its metadata
@@ -119,7 +119,7 @@ def handle_event(event: Dict, *_args, **_kwargs) -> Dict:
     except KeyError as err:
         logger.error('Missing required metadata %s. Ignoring...', err,
                      extra={'error': type(err).__name__,
-                            'errorDetail': {'key': err.strip('\'')},
+                            'errorDetail': {'key': str(err)..strip('\'')},
                             'event': event})
 
         return None

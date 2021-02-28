@@ -287,8 +287,9 @@ Resources:
               'id=' + $context.requestId)
 
             #set($context.requestOverride.header.x-amz-meta-table =
-              $input.params().path.tableName.toLowerCase())
-            #set($context.requestOverride.header.x-amz-meta-requestTime =
+              $input.params().path.tableName.toLowerCase().replaceAll('[^A-Za-z0-9]', '-'))
+
+            #set($context.requestOverride.header.x-amz-meta-requesttime =
               $context.requestTime)
 
             $input.body

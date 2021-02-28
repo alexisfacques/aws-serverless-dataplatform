@@ -1,0 +1,3 @@
+[submodule "cloudformation/macro-latest-layer-version"]
+	path = cloudformation/macro-latest-layer-version
+	url = https://github.com/alexisfacques/aws-cloudformation-macro-lambda-latest-layer-version.git

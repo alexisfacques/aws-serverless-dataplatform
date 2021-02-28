@@ -181,7 +181,6 @@ USER_POOL_AUTHORIZATION_TOKEN=`aws cognito-idp admin-initiate-auth \
   --query 'AuthenticationResult.IdToken' \
   --output 'text'`
 echo 'UserPool id token:' $USER_POOL_AUTHORIZATION_TOKEN
-
 ```
 
 This exampled showed how to programmatically change a UserPool user's password using the AWS CLI and an admin account. It is your responsibility to provide your user with a proper way of authenticating.
