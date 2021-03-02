@@ -147,21 +147,6 @@ Resources:
               - sts:AssumeRole
       Path: "/"
       Policies:
-        - Fn::If:
-            - ShouldEnableEncryption
-            - PolicyName: KmsAccess
-              PolicyDocument:
-                Statement:
-                  - Effect: Allow
-                    Action:
-                      - kms:Encrypt*
-                      - kms:Decrypt*
-                      - kms:ReEncrypt*
-                      - kms:GenerateDataKey*
-                      - kms:Describe*
-                    Resource:
-                      - !Ref KmsKeyArn
-            - !Ref AWS::NoValue
         # Create and put events to Cloudwatch events (Eventbridge).
         - PolicyName: EventsWrite
           PolicyDocument:
@@ -171,15 +156,78 @@ Resources:
                   - events:PutEvents
                 Resource:
                   - "*"
+        # Required permissions to be able to execute queries on the
+        # CatalogDatabase tables.
         - PolicyName: AthenaExecution
           PolicyDocument:
             Statement:
+              # Get catalog and logs S3 buckets metadata.
               - Effect: Allow
                 Action:
-                  - glue:*
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource:
+                  - Fn::ImportValue: LogsBucketArn
+                  - Fn::ImportValue: DataframeBucketArn
+              # Put logs to the Athena logs bucket.
+              - Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:PutObject
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - Fn::ImportValue: LogsBucketArn
+                        - "/AWSLogs/"
+                        - !Ref AWS::AccountId
+                        - "/Athena/"
+                        - !Ref AWS::Region
+                        - "/*"
+              # Get objects from the catalog S3 bucket.
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - Fn::ImportValue: LogsBucketArn
+                        - "/AWSLogs/"
+                        - !Ref AWS::AccountId
+                        - "/Athena/"
+                        - !Ref AWS::Region
+                        - "/*"
+                  - Fn::Join:
+                      - ""
+                      - - Fn::ImportValue: DataframeBucketArn
+                        - "/*"
+              # Get catalog Glue database.
+              - Effect: Allow
+                Action:
                   - glue:GetDatabase
-                  # arn:aws:glue:eu-west-1:177754923675:catalog
-                  - glue:GetTable
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - "arn:"
+                        - !Ref AWS::Partition
+                        - ":glue:"
+                        - !Ref AWS::Region
+                        - ":"
+                        - !Ref AWS::AccountId
+                        - ":catalog"
+                  - Fn::Join:
+                      - ""
+                      - - "arn:"
+                        - !Ref AWS::Partition
+                        - ":glue:"
+                        - !Ref AWS::Region
+                        - ":"
+                        - !Ref AWS::AccountId
+                        - ":database/"
+                        - !Ref CatalogDatabase
+              # Get tables and partitions metadata in the Glue database.
+              - Effect: Allow
+                Action:
+                  - glue:GetTable*
                   - glue:GetPartition*
                 Resource:
                   - Fn::Join:
@@ -199,9 +247,8 @@ Resources:
                         - !Ref AWS::Region
                         - ":"
                         - !Ref AWS::AccountId
-                        - ":table/"
+                        - ":database/"
                         - !Ref CatalogDatabase
-                        - "/*"
                   - Fn::Join:
                       - ""
                       - - "arn:"
@@ -210,30 +257,10 @@ Resources:
                         - !Ref AWS::Region
                         - ":"
                         - !Ref AWS::AccountId
-                        - ":database/"
+                        - ":table/"
                         - !Ref CatalogDatabase
-
-              - Effect: Allow
-                Action:
-                  - s3:ListBucket
-                  - s3:ListBucketMultipartUploads
-                Resource:
-                  - Fn::ImportValue: LogsBucketArn
-              - Effect: Allow
-                Action:
-                  - s3:AbortMultipartUpload
-                  - s3:GetBucketLocation
-                  - s3:GetObject
-                  - s3:PutObject
-                Resource:
-                  - Fn::Join:
-                      - ""
-                      - - Fn::ImportValue: LogsBucketArn
-                        - "/AWSLogs/"
-                        - !Ref AWS::AccountId
-                        - "/Athena/"
-                        - !Ref AWS::Region
                         - "/*"
+              # Execute Athena queries.
               - Effect: Allow
                 Action:
                   - athena:GetQueryExecution
@@ -270,6 +297,7 @@ Resources:
                         - ":"
                         - !Ref AWS::AccountId
                         - ":*"
+        # Receive / Send / Delete messages from the AthenaExecutorQueue.
         - PolicyName: SqsConsumer
           PolicyDocument:
             Statement:
@@ -281,7 +309,21 @@ Resources:
                   - sqs:GetQueue*
                 Resource:
                   - !GetAtt AthenaExecutorQueue.Arn
-
+        - Fn::If:
+            - ShouldEnableEncryption
+            - PolicyName: KmsAccess
+              PolicyDocument:
+                Statement:
+                  - Effect: Allow
+                    Action:
+                      - kms:Encrypt*
+                      - kms:Decrypt*
+                      - kms:ReEncrypt*
+                      - kms:GenerateDataKey*
+                      - kms:Describe*
+                    Resource:
+                      - !Ref KmsKeyArn
+            - !Ref AWS::NoValue
   #
   AthenaExecutorFunctionEventSourceMapping:
     Type: AWS::Lambda::EventSourceMapping
@@ -352,6 +394,11 @@ Resources:
         detail:
           state:
             - SUCCEEDED
+          result:
+            columns:
+              count:
+                - anything-but:
+                    - 0
       State: ENABLED
       Targets:
         - Arn: !GetAtt AthenaExecutorQueue.Arn
@@ -390,7 +437,7 @@ Resources:
                     if not loop.last %}, {% endif %}{% endfor %}) ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
                     WITH SERDEPROPERTIES ('ignore.malformed.json'='true') LOCATION '{{ tableLocation
                     }}' TBLPROPERTIES ('has_encrypted_data'='{{ isEncrypted }}');
-#
+
         - Arn: !GetAtt AthenaExecutorQueue.Arn
           Id: SelectMissingColumnsRule
           SqsParameters:
@@ -398,7 +445,7 @@ Resources:
           InputTransformer:
             InputPathsMap:
               tableName: $.detail.result.table.name
-              columns: $.detail.result.columns
+              columns: $.detail.result.columns.keys
             InputTemplate:
               Fn::Sub:
                 - '
@@ -424,7 +471,7 @@ Resources:
         - Arn: !GetAtt AthenaExecutorQueue.Arn
           Id: AddPartitionsRule
           SqsParameters:
-            MessageGroupId: AddPartitions
+            MessageGroupId: AddPartition
           InputTransformer:
             InputPathsMap:
               tableName: $.detail.result.table.name
@@ -475,7 +522,6 @@ Resources:
                           - !Ref KmsKeyArn
           - !Ref AWS::NoValue
 
-  #
   AthenaExecutorDlqQueueAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:

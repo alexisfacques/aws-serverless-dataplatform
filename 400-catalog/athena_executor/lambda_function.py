@@ -38,17 +38,32 @@ def handle_event(event: Dict, *_args, **_kwargs) -> Dict:
     try:
         # Templatize query.
         query_string: str = Template(event['queryTemplate']) \
-            .render(event['templateValues'])
+            .render(event.get('templateValues', {}))
 
     except Exception as err:
         pass
 
-    result = athena.execute(query_string) \
+    result_set: Dict = athena.execute(query_string) \
         .wait_for_result().get('ResultSet',{})
 
-    logger.info('Successfully executed query.', extra={'result_set': result})
+    # 2D array.
+    # First row is a list of the column headers.
+    # All the following rows are actual data rows.
+    rows: List = result_set.get('Rows', [])
 
-    return result
+    logger.debug('Successfully executed query.',
+                 extra={'result_set': result_set})
+
+    return {
+        'query': query_string,
+        'rowsCount': max(len(rows) - 1, 0),
+        'rows': [{rows[0]['Data'][index]['VarCharValue']: cell['VarCharValue']
+                  for index, cell in enumerate(row['Data'])}
+                 for row in rows[1:]]
+    }
+
+
+    result
 
 
 def lambda_handler(event: Dict, context):
